@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:io';
 
 import 'package:flutter/gestures.dart';
@@ -386,9 +387,9 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
 
                     return _CategoryCard(
                       category: category,
-                      thumbnailPath: _thumbnailPathFor(thumbnail),
+                      imageProvider: _categoryImageProvider(thumbnail),
                       selected: isSelected,
-                      onTap: () => _controller.selectCategory(category),
+                      onTap: () => _handleCategorySelection(category),
                     );
                   },
                 ),
@@ -653,7 +654,30 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     if (thumbnailPath == null) {
       return null;
     }
-    return FileImage(File(thumbnailPath));
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final targetSize = math.min(
+      (((_controller.gridThumbnailSize + 16) * dpr).round()),
+      EmojiThumbnailService.thumbnailMaxSize,
+    );
+    return ResizeImage(
+      FileImage(File(thumbnailPath)),
+      width: targetSize,
+      height: targetSize,
+    );
+  }
+
+  ImageProvider<Object>? _categoryImageProvider(EmojiItem? item) {
+    final thumbnailPath = _thumbnailPathFor(item);
+    if (thumbnailPath == null) {
+      return null;
+    }
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final targetSize = math.min((96 * dpr).round(), EmojiThumbnailService.thumbnailMaxSize);
+    return ResizeImage(
+      FileImage(File(thumbnailPath)),
+      width: targetSize,
+      height: targetSize,
+    );
   }
 
   String? _thumbnailPathFor(EmojiItem? item) {
@@ -665,6 +689,16 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
       return thumbnailPath;
     }
     return null;
+  }
+
+  void _handleCategorySelection(String category) {
+    if (_controller.selectedCategory == category) {
+      return;
+    }
+    final imageCache = PaintingBinding.instance.imageCache;
+    imageCache.clear();
+    imageCache.clearLiveImages();
+    _controller.selectCategory(category);
   }
 
   Future<void> _showPreview(EmojiItem item) async {
@@ -733,13 +767,13 @@ class _StatChip extends StatelessWidget {
 class _CategoryCard extends StatelessWidget {
   const _CategoryCard({
     required this.category,
-    required this.thumbnailPath,
+    required this.imageProvider,
     required this.selected,
     required this.onTap,
   });
 
   final String category;
-  final String? thumbnailPath;
+  final ImageProvider<Object>? imageProvider;
   final bool selected;
   final VoidCallback onTap;
 
@@ -770,7 +804,7 @@ class _CategoryCard extends StatelessWidget {
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(16),
                     child: SizedBox.expand(
-                      child: thumbnailPath == null
+                      child: imageProvider == null
                           ? const ColoredBox(
                               color: Color(0xFF30343A),
                               child: Icon(
@@ -779,8 +813,8 @@ class _CategoryCard extends StatelessWidget {
                                 size: 32,
                               ),
                             )
-                          : Image.file(
-                              File(thumbnailPath!),
+                          : Image(
+                              image: imageProvider!,
                               fit: BoxFit.cover,
                               errorBuilder: (context, error, stackTrace) {
                                 return const ColoredBox(

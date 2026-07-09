@@ -38,6 +38,7 @@ class _EmojiPreviewDialogState extends State<EmojiPreviewDialog> {
   late final TextEditingController _remarkController;
   bool _savingRemark = false;
   bool _reordering = false;
+  ImageProvider<Object>? _previewImageProvider;
 
   @override
   void initState() {
@@ -47,6 +48,7 @@ class _EmojiPreviewDialogState extends State<EmojiPreviewDialog> {
 
   @override
   void dispose() {
+    _previewImageProvider?.evict();
     _remarkController.dispose();
     super.dispose();
   }
@@ -196,20 +198,36 @@ class _EmojiPreviewDialogState extends State<EmojiPreviewDialog> {
               ),
               const SizedBox(height: 20),
               Expanded(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(18),
-                  child: ColoredBox(
-                    color: const Color(0xFF111315),
-                    child: Image.file(
-                      File(widget.item.path),
-                      fit: BoxFit.contain,
-                      errorBuilder: (context, error, stackTrace) {
-                        return const Center(
-                          child: Text('图片加载失败'),
-                        );
-                      },
-                    ),
-                  ),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final dpr = MediaQuery.devicePixelRatioOf(context);
+                    final targetWidth =
+                        (constraints.maxWidth * dpr).round().clamp(256, 4096);
+                    final targetHeight =
+                        (constraints.maxHeight * dpr).round().clamp(256, 4096);
+                    final provider = ResizeImage(
+                      FileImage(File(widget.item.path)),
+                      width: targetWidth,
+                      height: targetHeight,
+                    );
+                    _previewImageProvider = provider;
+
+                    return ClipRRect(
+                      borderRadius: BorderRadius.circular(18),
+                      child: ColoredBox(
+                        color: const Color(0xFF111315),
+                        child: Image(
+                          image: provider,
+                          fit: BoxFit.contain,
+                          errorBuilder: (context, error, stackTrace) {
+                            return const Center(
+                              child: Text('图片加载失败'),
+                            );
+                          },
+                        ),
+                      ),
+                    );
+                  },
                 ),
               ),
               const SizedBox(height: 20),
