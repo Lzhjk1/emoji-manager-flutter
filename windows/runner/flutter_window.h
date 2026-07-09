@@ -3,6 +3,8 @@
 
 #include <flutter/dart_project.h>
 #include <flutter/flutter_view_controller.h>
+#include <flutter/method_channel.h>
+#include <flutter/encodable_value.h>
 
 #include <memory>
 
@@ -23,11 +25,31 @@ class FlutterWindow : public Win32Window {
                          LPARAM const lparam) noexcept override;
 
  private:
+  void ApplyWindowSettings(const flutter::EncodableMap& arguments,
+                           flutter::MethodResult<flutter::EncodableValue>* result);
+  void SetAlwaysOnTop(bool enabled);
+  void SetCloseToTray(bool enabled);
+  void MinimizeToTray();
+  void RestoreFromTray();
+  void ToggleWindowVisibility();
+  void EnsureTrayIcon();
+  void RemoveTrayIcon();
+  void ExitApplication();
+
   // The project to run.
   flutter::DartProject project_;
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      clipboard_channel_;
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      window_channel_;
+  bool close_to_tray_ = false;
+  bool always_on_top_ = false;
+  bool force_close_ = false;
+  bool tray_icon_added_ = false;
+  NOTIFYICONDATA tray_icon_data_ = {};
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

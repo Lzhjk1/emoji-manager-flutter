@@ -1,0 +1,75 @@
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../models/close_button_behavior.dart';
+import '../models/sort_order.dart';
+
+class EmojiSettingsService {
+  static const _rootPathKey = 'emoji_root_path';
+  static const _sortOrderKey = 'emoji_sort_order';
+  static const _gridThumbnailSizeKey = 'emoji_grid_thumbnail_size';
+  static const _closeButtonBehaviorKey = 'close_button_behavior';
+  static const _alwaysOnTopKey = 'always_on_top';
+  static const _ignoredDirectoriesKey = 'ignored_directories';
+
+  Future<String?> loadRootPath() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_rootPathKey);
+  }
+
+  Future<void> saveRootPath(String path) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_rootPathKey, path);
+  }
+
+  Future<SortOrder> loadSortOrder() async {
+    final prefs = await SharedPreferences.getInstance();
+    return SortOrder.fromStorage(prefs.getString(_sortOrderKey));
+  }
+
+  Future<void> saveSortOrder(SortOrder sortOrder) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_sortOrderKey, sortOrder.storageValue);
+  }
+
+  Future<double> loadGridThumbnailSize() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getDouble(_gridThumbnailSizeKey) ?? 180;
+  }
+
+  Future<void> saveGridThumbnailSize(double size) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_gridThumbnailSizeKey, size);
+  }
+
+  Future<CloseButtonBehavior> loadCloseButtonBehavior() async {
+    final prefs = await SharedPreferences.getInstance();
+    return CloseButtonBehavior.fromStorage(
+      prefs.getString(_closeButtonBehaviorKey),
+    );
+  }
+
+  Future<void> saveCloseButtonBehavior(CloseButtonBehavior behavior) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_closeButtonBehaviorKey, behavior.storageValue);
+  }
+
+  Future<bool> loadAlwaysOnTop() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_alwaysOnTopKey) ?? false;
+  }
+
+  Future<void> saveAlwaysOnTop(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_alwaysOnTopKey, value);
+  }
+
+  Future<List<String>> loadIgnoredDirectories() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getStringList(_ignoredDirectoriesKey) ?? const [];
+  }
+
+  Future<void> saveIgnoredDirectories(List<String> directories) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_ignoredDirectoriesKey, directories);
+  }
+}
