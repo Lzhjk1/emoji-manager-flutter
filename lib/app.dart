@@ -21,6 +21,7 @@ class MyApp extends StatelessWidget {
       title: '表情包管理器',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
+        fontFamily: 'Microsoft YaHei UI',
         useMaterial3: true,
         colorScheme: colorScheme,
         scaffoldBackgroundColor: baseSurface,

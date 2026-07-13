@@ -46,6 +46,11 @@ class EmojiThumbnailService {
     required Map<String, ThumbnailEntry> index,
   }) async {
     final relativeSourcePath = p.relative(filePath, from: rootPath);
+    final extension = p.extension(filePath).toLowerCase();
+    if (extension == '.gif') {
+      index.remove(relativeSourcePath);
+      return null;
+    }
     final existingEntry = index[relativeSourcePath];
     final thumbnailRelativePath = p.join(
       cacheDirectoryName,

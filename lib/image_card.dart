@@ -75,7 +75,7 @@ class ImageCard extends StatelessWidget {
                         ? const _CardPlaceholder()
                         : Image(
                             image: imageProvider!,
-                            fit: BoxFit.cover,
+                            fit: BoxFit.contain,
                             errorBuilder: (context, error, stackTrace) {
                               return const _CardPlaceholder();
                             },

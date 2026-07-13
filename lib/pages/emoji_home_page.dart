@@ -652,6 +652,9 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
   ImageProvider<Object>? _imageProviderFor(EmojiItem item) {
     final thumbnailPath = _thumbnailPathFor(item);
     if (thumbnailPath == null) {
+      if (item.mimeType == 'image/gif') {
+        return FileImage(File(item.path));
+      }
       return null;
     }
     final dpr = MediaQuery.devicePixelRatioOf(context);
@@ -667,8 +670,14 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
   }
 
   ImageProvider<Object>? _categoryImageProvider(EmojiItem? item) {
+    if (item == null) {
+      return null;
+    }
     final thumbnailPath = _thumbnailPathFor(item);
     if (thumbnailPath == null) {
+      if (item.mimeType == 'image/gif') {
+        return FileImage(File(item.path));
+      }
       return null;
     }
     final dpr = MediaQuery.devicePixelRatioOf(context);
