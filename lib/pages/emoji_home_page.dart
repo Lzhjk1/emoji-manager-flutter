@@ -149,6 +149,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                       final item = _controller.visibleItems[index];
                       return Tooltip(
                         message: item.name,
+                        excludeFromSemantics: true,
                         child: ImageCard(
                           width: double.infinity,
                           height: double.infinity,
