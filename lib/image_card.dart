@@ -14,6 +14,7 @@ class ImageCard extends StatelessWidget {
     this.showBottomOverlay = true,
     this.onTap,
     this.onLongPress,
+    this.onSecondaryTapUp,
   });
 
   final ImageProvider<Object>? imageProvider;
@@ -27,6 +28,7 @@ class ImageCard extends StatelessWidget {
   final bool showBottomOverlay;
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
+  final void Function(TapUpDetails details)? onSecondaryTapUp;
 
   @override
   Widget build(BuildContext context) {
@@ -38,6 +40,7 @@ class ImageCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(5),
         onTap: onTap,
         onLongPress: onLongPress,
+        onSecondaryTapUp: onSecondaryTapUp,
         child: Container(
           width: width,
           height: height,

@@ -10,6 +10,7 @@ class EmojiSettingsService {
   static const _closeButtonBehaviorKey = 'close_button_behavior';
   static const _alwaysOnTopKey = 'always_on_top';
   static const _ignoredDirectoriesKey = 'ignored_directories';
+  static const _recentUsageKey = 'emoji_recent_usage';
 
   Future<String?> loadRootPath() async {
     final prefs = await SharedPreferences.getInstance();
@@ -71,5 +72,15 @@ class EmojiSettingsService {
   Future<void> saveIgnoredDirectories(List<String> directories) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(_ignoredDirectoriesKey, directories);
+  }
+
+  Future<List<String>> loadRecentUsage() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getStringList(_recentUsageKey) ?? const [];
+  }
+
+  Future<void> saveRecentUsage(List<String> paths) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_recentUsageKey, paths);
   }
 }

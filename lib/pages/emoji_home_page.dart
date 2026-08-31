@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:io';
 
@@ -24,7 +25,6 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
   late final EmojiManagerController _controller;
   final TextEditingController _searchController = TextEditingController();
   final ScrollController _categoryScrollController = ScrollController();
-  bool _showCompactStats = false;
 
   @override
   void initState() {
@@ -112,25 +112,6 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
       children: [
         _buildTopBar(context),
         const SizedBox(height: 12),
-        TextField(
-          controller: _searchController,
-          onChanged: _controller.updateSearchQuery,
-          decoration: InputDecoration(
-            hintText: '搜索表情文件名或备注',
-            prefixIcon: const Icon(Icons.search),
-            suffixIcon: _controller.searchQuery.isEmpty
-                ? null
-                : IconButton(
-                    tooltip: '清空搜索',
-                    onPressed: () {
-                      _searchController.clear();
-                      _controller.clearSearch();
-                    },
-                    icon: const Icon(Icons.close),
-                  ),
-          ),
-        ),
-        const SizedBox(height: 16),
         if (_controller.categories.isNotEmpty) _buildCategoryBar(context),
         if (_controller.categories.isNotEmpty) const SizedBox(height: 16),
         if (_controller.errorMessage != null)
@@ -161,20 +142,25 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                       maxCrossAxisExtent: _controller.gridThumbnailSize,
                       mainAxisSpacing: 8,
                       crossAxisSpacing: 8,
-                      childAspectRatio: 0.9,
+                      childAspectRatio: 1.0,
                     ),
                     itemCount: _controller.visibleItems.length,
                     itemBuilder: (context, index) {
                       final item = _controller.visibleItems[index];
-                      return ImageCard(
-                        width: double.infinity,
-                        height: double.infinity,
-                        imageProvider: _imageProviderFor(item),
-                        title: item.name,
-                        showText: false,
-                        showBottomOverlay: false,
-                        onTap: () => _handleEmojiTap(item),
-                        onLongPress: () => _showPreview(item),
+                      return Tooltip(
+                        message: item.name,
+                        child: ImageCard(
+                          width: double.infinity,
+                          height: double.infinity,
+                          imageProvider: _imageProviderFor(item),
+                          title: item.name,
+                          showText: false,
+                          showBottomOverlay: false,
+                          onTap: () => _handleEmojiTap(item),
+                          onLongPress: () => _showPreview(item),
+                          onSecondaryTapUp: (details) =>
+                              _showItemMenu(item, details.globalPosition),
+                        ),
                       );
                     },
                   ),
@@ -232,7 +218,6 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
   }
 
   Widget _buildTopBar(BuildContext context) {
-    final selectedCount = _controller.visibleItems.length;
     return LayoutBuilder(
       builder: (context, constraints) {
         final compact = constraints.maxWidth < 980;
@@ -290,10 +275,11 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
 
         if (!compact) {
           return Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(child: _buildStatsWrap(selectedCount)),
-              const SizedBox(width: 12),
+              _buildStatsWrap(),
+              const SizedBox(width: 16),
+              _buildSearchField(width: 420),
+              const Spacer(),
               actions,
             ],
           );
@@ -304,99 +290,116 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
           children: [
             Row(
               children: [
-                FilledButton.tonalIcon(
-                  onPressed: () {
-                    setState(() {
-                      _showCompactStats = !_showCompactStats;
-                    });
-                  },
-                  icon: Icon(
-                    _showCompactStats
-                        ? Icons.visibility_off_outlined
-                        : Icons.analytics_outlined,
-                  ),
-                  label: Text(_showCompactStats ? '隐藏统计' : '显示统计'),
-                ),
+                _buildStatsWrap(),
                 const Spacer(),
                 actions,
               ],
             ),
-            if (_showCompactStats) ...[
-              const SizedBox(height: 12),
-              _buildStatsWrap(selectedCount),
-            ],
+            const SizedBox(height: 12),
+            _buildSearchField(),
           ],
         );
       },
     );
   }
 
-  Widget _buildStatsWrap(int selectedCount) {
+  Widget _buildStatsWrap() {
     return Wrap(
       spacing: 8,
       runSpacing: 8,
       children: [
         _StatChip(label: '分类', value: '${_controller.categories.length}'),
         _StatChip(label: '总表情', value: '${_controller.totalEmojiCount}'),
-        _StatChip(label: '当前视图', value: '$selectedCount'),
-        _StatChip(label: '排序', value: _controller.sortOrder.label),
-        _StatChip(
-          label: '缩略图',
-          value: '${_controller.gridThumbnailSize.round()}',
-        ),
       ],
     );
   }
 
+  Widget _buildSearchField({double? width}) {
+    return SizedBox(
+      width: width,
+      child: TextField(
+        controller: _searchController,
+        onChanged: _controller.updateSearchQuery,
+        decoration: InputDecoration(
+          isDense: true,
+          hintText: '搜索表情文件名或备注',
+          prefixIcon: const Icon(Icons.search),
+          suffixIcon: _controller.searchQuery.isEmpty
+              ? null
+              : IconButton(
+                  tooltip: '清空搜索',
+                  onPressed: () {
+                    _searchController.clear();
+                    _controller.clearSearch();
+                  },
+                  icon: const Icon(Icons.close),
+                ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildCategoryBar(BuildContext context) {
+    final entries = <_CategoryEntry>[
+      _CategoryEntry(
+        category: EmojiManagerController.allCategoryView,
+        label: '全部',
+        imageProvider:
+            _categoryImageProvider(_controller.firstItemOverall),
+        iconData: Icons.grid_view_outlined,
+      ),
+      _CategoryEntry(
+        category: EmojiManagerController.recentCategoryView,
+        label: '最近使用',
+        imageProvider:
+            _categoryImageProvider(_controller.recentViewThumbnail),
+        iconData: Icons.history,
+      ),
+      for (final category in _controller.categories)
+        _CategoryEntry(
+          category: category,
+          label: category,
+          imageProvider:
+              _categoryImageProvider(_controller.categoryThumbnails[category]),
+        ),
+    ];
+
+    // 分类框最外层
     return Container(
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: const Color(0xFF11161C),
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(6),
         border: Border.all(color: Colors.white10),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '分类',
-            style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  color: Colors.white60,
-                  letterSpacing: 0.6,
-                ),
-          ),
-          const SizedBox(height: 12),
-          SizedBox(
-            height: 132,
-            child: Scrollbar(
+      child: SizedBox(
+        height: 118,
+        child: Scrollbar(
+          controller: _categoryScrollController,
+          notificationPredicate: (notification) => notification.depth == 0,
+          child: Listener(
+            onPointerSignal: _handleCategoryPointerSignal,
+            child: ListView.separated(
               controller: _categoryScrollController,
-              thumbVisibility: true,
-              notificationPredicate: (notification) => notification.depth == 0,
-              child: Listener(
-                onPointerSignal: _handleCategoryPointerSignal,
-                child: ListView.separated(
-                  controller: _categoryScrollController,
-                  scrollDirection: Axis.horizontal,
-                  itemCount: _controller.categories.length,
-                  separatorBuilder: (_, _) => const SizedBox(width: 12),
-                  itemBuilder: (context, index) {
-                    final category = _controller.categories[index];
-                    final thumbnail = _controller.categoryThumbnails[category];
-                    final isSelected = category == _controller.selectedCategory;
+              scrollDirection: Axis.horizontal,
+              itemCount: entries.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 12),
+              itemBuilder: (context, index) {
+                final entry = entries[index];
+                final isSelected =
+                    entry.category == _controller.selectedCategory;
 
-                    return _CategoryCard(
-                      category: category,
-                      imageProvider: _categoryImageProvider(thumbnail),
-                      selected: isSelected,
-                      onTap: () => _handleCategorySelection(category),
-                    );
-                  },
-                ),
-              ),
+                return _CategoryCard(
+                  category: entry.label,
+                  imageProvider: entry.imageProvider,
+                  iconData: entry.iconData,
+                  selected: isSelected,
+                  onTap: () => _handleCategorySelection(entry.category),
+                );
+              },
             ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -637,6 +640,10 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
       return;
     }
 
+    if (copied) {
+      unawaited(_controller.recordUsage(item.path));
+    }
+
     final messenger = ScaffoldMessenger.of(context);
     messenger.hideCurrentSnackBar();
     messenger.showSnackBar(
@@ -647,6 +654,45 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
         duration: const Duration(seconds: 2),
       ),
     );
+  }
+
+  Future<void> _showItemMenu(EmojiItem item, Offset position) async {
+    final overlay =
+        Overlay.of(context).context.findRenderObject()! as RenderBox;
+    final selected = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        position.dx,
+        position.dy,
+        overlay.size.width - position.dx,
+        overlay.size.height - position.dy,
+      ),
+      items: const [
+        PopupMenuItem<String>(
+          value: 'copy',
+          child: ListTile(
+            leading: Icon(Icons.content_copy),
+            title: Text('复制到剪贴板'),
+          ),
+        ),
+        PopupMenuItem<String>(
+          value: 'preview',
+          child: ListTile(
+            leading: Icon(Icons.visibility_outlined),
+            title: Text('预览与备注'),
+          ),
+        ),
+      ],
+    );
+    if (!mounted || selected == null) {
+      return;
+    }
+    switch (selected) {
+      case 'copy':
+        await _handleEmojiTap(item);
+      case 'preview':
+        await _showPreview(item);
+    }
   }
 
   ImageProvider<Object>? _imageProviderFor(EmojiItem item) {
@@ -773,51 +819,70 @@ class _StatChip extends StatelessWidget {
   }
 }
 
+class _CategoryEntry {
+  const _CategoryEntry({
+    required this.category,
+    required this.label,
+    required this.imageProvider,
+    this.iconData,
+  });
+
+  final String category;
+  final String label;
+  final ImageProvider<Object>? imageProvider;
+  final IconData? iconData;
+}
+
 class _CategoryCard extends StatelessWidget {
   const _CategoryCard({
     required this.category,
     required this.imageProvider,
     required this.selected,
     required this.onTap,
+    this.iconData,
   });
 
   final String category;
   final ImageProvider<Object>? imageProvider;
+  final IconData? iconData;
   final bool selected;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final placeholderIcon = iconData ?? Icons.folder_copy_outlined;
 
     return Material(
       color: Colors.transparent,
+      // 分类框鼠标悬浮时高亮部分
       child: InkWell(
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(6),
         onTap: onTap,
         child: Ink(
-          width: 112,
+          width: 100,
           decoration: BoxDecoration(
             color: const Color(0xFF1A1D21),
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(6),
             border: Border.all(
               color: selected ? theme.colorScheme.primary : Colors.white12,
               width: selected ? 1.6 : 1,
             ),
           ),
+          // 分类图片最内框
           child: Padding(
             padding: const EdgeInsets.all(10),
             child: Column(
               children: [
                 Expanded(
                   child: ClipRRect(
-                    borderRadius: BorderRadius.circular(16),
+                    borderRadius: BorderRadius.circular(6),
                     child: SizedBox.expand(
                       child: imageProvider == null
-                          ? const ColoredBox(
-                              color: Color(0xFF30343A),
+                          ? ColoredBox(
+                              color: const Color(0xFF30343A),
                               child: Icon(
-                                Icons.folder_copy_outlined,
+                                placeholderIcon,
                                 color: Colors.white38,
                                 size: 32,
                               ),
@@ -826,10 +891,10 @@ class _CategoryCard extends StatelessWidget {
                               image: imageProvider!,
                               fit: BoxFit.cover,
                               errorBuilder: (context, error, stackTrace) {
-                                return const ColoredBox(
-                                  color: Color(0xFF30343A),
+                                return ColoredBox(
+                                  color: const Color(0xFF30343A),
                                   child: Icon(
-                                    Icons.folder_copy_outlined,
+                                    placeholderIcon,
                                     color: Colors.white38,
                                     size: 32,
                                   ),

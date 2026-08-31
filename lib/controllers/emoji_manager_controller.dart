@@ -12,6 +12,10 @@ import '../services/emoji_settings_service.dart';
 import '../services/window_control_service.dart';
 
 class EmojiManagerController extends ChangeNotifier {
+  static const String allCategoryView = '__all__';
+  static const String recentCategoryView = '__recent__';
+  static const int _recentUsageLimit = 200;
+
   EmojiManagerController({
     EmojiRepository? repository,
     EmojiCacheService? cacheService,
@@ -38,6 +42,7 @@ class EmojiManagerController extends ChangeNotifier {
   List<String> _ignoredDirectories = const [];
   Map<String, List<EmojiItem>> _itemsByCategory = {};
   Map<String, CategoryMetadata> _categoryMetadata = {};
+  List<String> _recentUsage = [];
 
   bool get loading => _loading;
   String? get rootPath => _rootPath;
@@ -68,13 +73,52 @@ class EmojiManagerController extends ChangeNotifier {
     );
   }
 
+  EmojiItem? get firstItemOverall {
+    for (final items in _itemsByCategory.values) {
+      if (items.isNotEmpty) {
+        return items.first;
+      }
+    }
+    return null;
+  }
+
+  EmojiItem? get recentViewThumbnail {
+    final recent = recentItems;
+    return recent.isEmpty ? null : recent.first;
+  }
+
+  List<EmojiItem> get recentItems {
+    final index = <String, EmojiItem>{
+      for (final items in _itemsByCategory.values)
+        for (final item in items) item.path: item,
+    };
+    return [
+      for (final path in _recentUsage)
+        if (index[path] != null) index[path]!,
+    ];
+  }
+
+  bool get _isSpecialView {
+    return _selectedCategory == allCategoryView ||
+        _selectedCategory == recentCategoryView;
+  }
+
   List<EmojiItem> get visibleItems {
     final currentCategory = _selectedCategory;
     if (currentCategory == null) {
       return const [];
     }
 
-    final source = _itemsByCategory[currentCategory] ?? const [];
+    final List<EmojiItem> source;
+    if (currentCategory == allCategoryView) {
+      source = [
+        for (final items in _itemsByCategory.values) ...items,
+      ];
+    } else if (currentCategory == recentCategoryView) {
+      source = recentItems;
+    } else {
+      source = _itemsByCategory[currentCategory] ?? const [];
+    }
     if (_searchQuery.isEmpty) {
       return source;
     }
@@ -97,6 +141,7 @@ class EmojiManagerController extends ChangeNotifier {
     _closeButtonBehavior = await _settingsService.loadCloseButtonBehavior();
     _alwaysOnTop = await _settingsService.loadAlwaysOnTop();
     _ignoredDirectories = await _settingsService.loadIgnoredDirectories();
+    _recentUsage = await _settingsService.loadRecentUsage();
     _rootPath = await _settingsService.loadRootPath();
     await _applyWindowSettings();
 
@@ -221,6 +266,7 @@ class EmojiManagerController extends ChangeNotifier {
         _sortOrder,
       );
       if (_selectedCategory != null &&
+          !_isSpecialView &&
           !_itemsByCategory.containsKey(_selectedCategory)) {
         _selectedCategory =
             _itemsByCategory.isEmpty ? null : _itemsByCategory.keys.first;
@@ -282,12 +328,48 @@ class EmojiManagerController extends ChangeNotifier {
   }
 
   int? indexOfItemInCategory(String itemPath) {
+    if (_selectedCategory == allCategoryView) {
+      var offset = 0;
+      for (final items in _itemsByCategory.values) {
+        final index = items.indexWhere((item) => item.path == itemPath);
+        if (index >= 0) {
+          return offset + index;
+        }
+        offset += items.length;
+      }
+      return null;
+    }
+    if (_selectedCategory == recentCategoryView) {
+      final index =
+          recentItems.indexWhere((item) => item.path == itemPath);
+      return index >= 0 ? index : null;
+    }
     final entry = _findItemEntry(itemPath);
     return entry?.index;
   }
 
   int totalCountOfCategory(String category) {
+    if (category == allCategoryView) {
+      return totalEmojiCount;
+    }
+    if (category == recentCategoryView) {
+      return recentItems.length;
+    }
     return _itemsByCategory[category]?.length ?? 0;
+  }
+
+  Future<void> recordUsage(String itemPath) async {
+    _recentUsage = [
+      itemPath,
+      ..._recentUsage.where((path) => path != itemPath),
+    ];
+    if (_recentUsage.length > _recentUsageLimit) {
+      _recentUsage = _recentUsage.sublist(0, _recentUsageLimit);
+    }
+    await _settingsService.saveRecentUsage(_recentUsage);
+    if (_selectedCategory == recentCategoryView) {
+      notifyListeners();
+    }
   }
 
   Future<void> saveRemark(String itemPath, String remark) async {
@@ -354,7 +436,8 @@ class EmojiManagerController extends ChangeNotifier {
   void _applyResult(Map<String, List<EmojiItem>> result) {
     _itemsByCategory = result;
     final categories = result.keys.toList(growable: false);
-    if (_selectedCategory == null || !result.containsKey(_selectedCategory)) {
+    if (!_isSpecialView &&
+        (_selectedCategory == null || !result.containsKey(_selectedCategory))) {
       _selectedCategory = categories.isEmpty ? null : categories.first;
     }
     _loading = false;
