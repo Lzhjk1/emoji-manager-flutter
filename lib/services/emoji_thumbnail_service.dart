@@ -125,6 +125,27 @@ class EmojiThumbnailService {
     return thumbnailPath;
   }
 
+  /// Removes the cached thumbnail (file + index entry) for [filePath] so the
+  /// next [ensureThumbnail] call regenerates it from the source image.
+  Future<void> invalidate({
+    required String rootPath,
+    required String filePath,
+    required Map<String, ThumbnailEntry> index,
+  }) async {
+    final relativeSourcePath = p.relative(filePath, from: rootPath);
+    final entry = index.remove(relativeSourcePath);
+    final thumbnailPath = entry?.thumbnailRelativePath ??
+        p.join(
+          cacheDirectoryName,
+          thumbnailDirectoryName,
+          '${_safeKeyForPath(relativeSourcePath)}.jpg',
+        );
+    final thumbnailFile = File(p.join(rootPath, thumbnailPath));
+    if (thumbnailFile.existsSync()) {
+      await thumbnailFile.delete();
+    }
+  }
+
   Future<void> saveIndex({
     required String rootPath,
     required Map<String, ThumbnailEntry> index,

@@ -318,6 +318,44 @@ class EmojiRepository {
     return _imageExtensions.contains(p.extension(filePath).toLowerCase());
   }
 
+  /// Force-regenerates the thumbnail for a single image and returns the
+  /// updated [EmojiItem]. Returns null when the file is gone or the image
+  /// cannot be decoded.
+  Future<EmojiItem?> refreshThumbnail(String rootPath, EmojiItem item) async {
+    final file = File(item.path);
+    if (!file.existsSync()) {
+      return null;
+    }
+
+    final thumbnailIndex = await _thumbnailService.loadIndex(rootPath);
+    await _thumbnailService.invalidate(
+      rootPath: rootPath,
+      filePath: item.path,
+      index: thumbnailIndex,
+    );
+
+    final lastModified = file.statSync().modified.millisecondsSinceEpoch;
+    final relativeSourcePath = p.relative(item.path, from: rootPath);
+    final thumbnailPath = await _thumbnailService.ensureThumbnail(
+      rootPath: rootPath,
+      filePath: item.path,
+      sourceModified: lastModified,
+      index: thumbnailIndex,
+    );
+
+    await _thumbnailService.saveIndex(
+      rootPath: rootPath,
+      index: thumbnailIndex,
+      // Keep every known entry; this is a single-file refresh.
+      activeSourcePaths: {...thumbnailIndex.keys, relativeSourcePath},
+    );
+
+    return item.copyWith(
+      lastModified: lastModified,
+      thumbnailPath: thumbnailPath,
+    );
+  }
+
   Future<void> _loadFolderRemarksRecursive(
     Directory directory,
     Map<String, String> collector,

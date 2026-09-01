@@ -863,6 +863,13 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
             title: Text('预览与备注'),
           ),
         ),
+        PopupMenuItem<String>(
+          value: 'refresh',
+          child: ListTile(
+            leading: Icon(Icons.image_outlined),
+            title: Text('刷新缩略图'),
+          ),
+        ),
       ],
     );
     if (!mounted || selected == null) {
@@ -873,7 +880,31 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
         await _handleEmojiTap(item);
       case 'preview':
         await _showPreview(item);
+      case 'refresh':
+        await _refreshItemThumbnail(item);
     }
+  }
+
+  Future<void> _refreshItemThumbnail(EmojiItem item) async {
+    // GIF previews load the source file directly and its mtime may not
+    // change; evict it. Thumbnail files get a fresh mtime on rebuild, so
+    // their FileImage cache key changes automatically.
+    PaintingBinding.instance.imageCache.evict(FileImage(File(item.path)));
+
+    final refreshed = await _controller.refreshThumbnail(item.path);
+    if (!mounted) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          refreshed ? '已刷新缩略图' : '刷新失败：无法重新生成缩略图',
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   ImageProvider<Object>? _imageProviderFor(EmojiItem item) {

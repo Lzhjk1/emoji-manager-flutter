@@ -461,6 +461,31 @@ class EmojiManagerController extends ChangeNotifier {
     }
   }
 
+  /// Regenerates the cached thumbnail of a single image. Returns false when
+  /// the item cannot be found or the thumbnail could not be rebuilt.
+  Future<bool> refreshThumbnail(String itemPath) async {
+    final entry = _findItemEntry(itemPath);
+    final rootPath = _rootPath;
+    if (entry == null || rootPath == null) {
+      return false;
+    }
+
+    final updated = await _repository.refreshThumbnail(
+      rootPath,
+      entry.items[entry.index],
+    );
+    if (updated == null) {
+      return false;
+    }
+
+    final items = [...entry.items];
+    items[entry.index] = updated;
+    _itemsByCategory[entry.category] = items;
+    await _saveCache();
+    notifyListeners();
+    return true;
+  }
+
   Future<void> saveRemark(String itemPath, String remark) async {
     final entry = _findItemEntry(itemPath);
     if (entry == null) {
