@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:image/image.dart' as img;
 
 class PlatformEmojiClipboardService {
   PlatformEmojiClipboardService._();
@@ -28,6 +29,43 @@ class PlatformEmojiClipboardService {
     return true;
   }
 
+  /// Decodes the image at [filePath] and puts it on the clipboard as a
+  /// CF_DIB bitmap (the format chat apps such as QQ use when pasting
+  /// screenshots), optionally hiding this window and sending Ctrl+V to the
+  /// previous foreground app.
+  ///
+  /// Returns true when the bitmap was placed on the clipboard.
+  static Future<bool> copyImageAndPaste(String filePath) async {
+    if (kIsWeb || !Platform.isWindows) {
+      return false;
+    }
+
+    final file = File(filePath);
+    if (!file.existsSync()) {
+      return false;
+    }
+
+    try {
+      final decoded = await compute(_decodeRgba, await file.readAsBytes());
+      if (decoded == null) {
+        return false;
+      }
+
+      final result = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'copyImageToClipboard',
+        <String, Object>{
+          'width': decoded.$1,
+          'height': decoded.$2,
+          'bytes': decoded.$3,
+          'paste': true,
+        },
+      );
+      return result?['clipboard'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   static Future<bool> _copyFileOnWindows(String filePath) async {
     try {
       final copied = await _channel.invokeMethod<bool>(
@@ -41,4 +79,13 @@ class PlatformEmojiClipboardService {
       return false;
     }
   }
+}
+
+(int, int, Uint8List)? _decodeRgba(Uint8List bytes) {
+  final image = img.decodeImage(bytes);
+  if (image == null) {
+    return null;
+  }
+  final rgba = image.getBytes(order: img.ChannelOrder.rgba);
+  return (image.width, image.height, rgba);
 }

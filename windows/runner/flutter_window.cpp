@@ -2,10 +2,13 @@
 
 #include <flutter/standard_method_codec.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <cstring>
 #include <optional>
 #include <shellapi.h>
 #include <string>
+#include <vector>
 
 #include "resource.h"
 #include "flutter/generated_plugin_registrant.h"
@@ -20,6 +23,10 @@ constexpr UINT kTrayIconId = 1001;
 constexpr UINT kTrayCallbackMessage = WM_APP + 1;
 constexpr UINT kTrayMenuShowId = 40001;
 constexpr UINT kTrayMenuExitId = 40002;
+constexpr UINT_PTR kForegroundTimerId = 2002;
+constexpr UINT kForegroundTimerIntervalMs = 250;
+constexpr int kHotkeyId = 2001;
+constexpr UINT kHotkeyModifierMask = MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_WIN;
 
 typedef struct _TRAE_DROPFILES {
   DWORD pFiles;
@@ -55,6 +62,69 @@ std::optional<bool> GetBoolValue(const flutter::EncodableMap& arguments,
   }
 
   return std::nullopt;
+}
+
+std::optional<int32_t> GetIntValue(const flutter::EncodableMap& arguments,
+                                   const char* key) {
+  const auto iterator = arguments.find(flutter::EncodableValue(key));
+  if (iterator == arguments.end()) {
+    return std::nullopt;
+  }
+
+  if (const auto* value = std::get_if<int32_t>(&iterator->second)) {
+    return *value;
+  }
+
+  return std::nullopt;
+}
+
+std::optional<std::vector<uint8_t>> GetBytesValue(
+    const flutter::EncodableMap& arguments,
+    const char* key) {
+  const auto iterator = arguments.find(flutter::EncodableValue(key));
+  if (iterator == arguments.end()) {
+    return std::nullopt;
+  }
+
+  if (const auto* value = std::get_if<std::vector<uint8_t>>(&iterator->second)) {
+    return *value;
+  }
+
+  return std::nullopt;
+}
+
+std::string WideToUtf8(const std::wstring& input) {
+  if (input.empty()) {
+    return std::string();
+  }
+
+  const int length =
+      WideCharToMultiByte(CP_UTF8, 0, input.data(),
+                          static_cast<int>(input.size()), nullptr, 0, nullptr,
+                          nullptr);
+  if (length <= 0) {
+    return std::string();
+  }
+
+  std::string output(static_cast<size_t>(length), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, input.data(), static_cast<int>(input.size()),
+                      output.data(), length, nullptr, nullptr);
+  return output;
+}
+
+void SendCtrlV() {
+  INPUT inputs[4] = {};
+  inputs[0].type = INPUT_KEYBOARD;
+  inputs[0].ki.wVk = VK_CONTROL;
+  inputs[1].type = INPUT_KEYBOARD;
+  inputs[1].ki.wVk = 'V';
+  inputs[2].type = INPUT_KEYBOARD;
+  inputs[2].ki.wVk = 'V';
+  inputs[2].ki.dwFlags = KEYEVENTF_KEYUP;
+  inputs[3].type = INPUT_KEYBOARD;
+  inputs[3].ki.wVk = VK_CONTROL;
+  inputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
+  SendInput(static_cast<UINT>(std::size(inputs)), inputs, sizeof(INPUT));
 }
 
 std::wstring Utf8ToWide(const std::string& input) {
@@ -192,6 +262,8 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
   EnsureTrayIcon();
+  SetTimer(GetHandle(), kForegroundTimerId, kForegroundTimerIntervalMs,
+           nullptr);
 
   clipboard_channel_ =
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
@@ -201,25 +273,60 @@ bool FlutterWindow::OnCreate() {
       [this](const flutter::MethodCall<flutter::EncodableValue>& call,
              std::unique_ptr<
                  flutter::MethodResult<flutter::EncodableValue>> result) {
-        if (call.method_name() != "copyFileToClipboard") {
-          result->NotImplemented();
+        if (call.method_name() == "copyFileToClipboard") {
+          const auto* arguments =
+              std::get_if<flutter::EncodableMap>(call.arguments());
+          if (arguments == nullptr) {
+            result->Error("invalid_arguments", "Arguments must be a map.");
+            return;
+          }
+
+          const auto path = GetStringValue(*arguments, "path");
+          if (!path.has_value() || path->empty()) {
+            result->Error("invalid_arguments", "path is required.");
+            return;
+          }
+
+          const bool copied =
+              CopyFilePathToClipboard(GetHandle(), *path);
+          result->Success(flutter::EncodableValue(copied));
           return;
         }
 
-        const auto* arguments = std::get_if<flutter::EncodableMap>(call.arguments());
-        if (arguments == nullptr) {
-          result->Error("invalid_arguments", "Arguments must be a map.");
+        if (call.method_name() == "copyImageToClipboard") {
+          const auto* arguments =
+              std::get_if<flutter::EncodableMap>(call.arguments());
+          if (arguments == nullptr) {
+            result->Error("invalid_arguments", "Arguments must be a map.");
+            return;
+          }
+
+          const auto width = GetIntValue(*arguments, "width");
+          const auto height = GetIntValue(*arguments, "height");
+          const auto bytes = GetBytesValue(*arguments, "bytes");
+          const auto paste = GetBoolValue(*arguments, "paste");
+          if (!width.has_value() || !height.has_value() || !bytes.has_value() ||
+              !paste.has_value()) {
+            result->Error(
+                "invalid_arguments",
+                "width, height, bytes and paste are required.");
+            return;
+          }
+
+          bool pasted = false;
+          const bool copied = CopyImageToClipboard(
+              width.value(), height.value(), bytes.value(), paste.value(),
+              &pasted);
+          flutter::EncodableMap response;
+          response[flutter::EncodableValue("clipboard")] =
+              flutter::EncodableValue(copied);
+          response[flutter::EncodableValue("pasted")] =
+              flutter::EncodableValue(pasted);
+          result->Success(flutter::EncodableValue(response));
           return;
         }
 
-        const auto path = GetStringValue(*arguments, "path");
-        if (!path.has_value() || path->empty()) {
-          result->Error("invalid_arguments", "path is required.");
-          return;
-        }
-
-        const bool copied = CopyFilePathToClipboard(GetHandle(), *path);
-        result->Success(flutter::EncodableValue(copied));
+        result->NotImplemented();
       });
   window_channel_ =
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
@@ -229,18 +336,52 @@ bool FlutterWindow::OnCreate() {
       [this](const flutter::MethodCall<flutter::EncodableValue>& call,
              std::unique_ptr<
                  flutter::MethodResult<flutter::EncodableValue>> result) {
-        if (call.method_name() != "applyWindowSettings") {
-          result->NotImplemented();
+        if (call.method_name() == "applyWindowSettings") {
+          const auto* arguments =
+              std::get_if<flutter::EncodableMap>(call.arguments());
+          if (arguments == nullptr) {
+            result->Error("invalid_arguments", "Arguments must be a map.");
+            return;
+          }
+
+          ApplyWindowSettings(*arguments, result.get());
           return;
         }
 
-        const auto* arguments = std::get_if<flutter::EncodableMap>(call.arguments());
-        if (arguments == nullptr) {
-          result->Error("invalid_arguments", "Arguments must be a map.");
+        if (call.method_name() == "getPreviousForegroundApp") {
+          flutter::EncodableMap response;
+          response[flutter::EncodableValue("processName")] =
+              flutter::EncodableValue(WideToUtf8(last_external_process_name_));
+          result->Success(flutter::EncodableValue(response));
           return;
         }
 
-        ApplyWindowSettings(*arguments, result.get());
+        if (call.method_name() == "setHotkeyEnabled") {
+          const auto* arguments =
+              std::get_if<flutter::EncodableMap>(call.arguments());
+          if (arguments == nullptr) {
+            result->Error("invalid_arguments", "Arguments must be a map.");
+            return;
+          }
+
+          const auto enabled = GetBoolValue(*arguments, "enabled");
+          const auto modifiers = GetIntValue(*arguments, "modifiers");
+          const auto key_code = GetIntValue(*arguments, "keyCode");
+          if (!enabled.has_value() || !modifiers.has_value() ||
+              !key_code.has_value()) {
+            result->Error("invalid_arguments",
+                          "enabled, modifiers and keyCode are required.");
+            return;
+          }
+
+          const bool registered =
+              SetHotkey(enabled.value(), static_cast<UINT>(modifiers.value()),
+                        static_cast<UINT>(key_code.value()));
+          result->Success(flutter::EncodableValue(registered));
+          return;
+        }
+
+        result->NotImplemented();
       });
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -256,6 +397,11 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  KillTimer(GetHandle(), kForegroundTimerId);
+  if (hotkey_registered_ && GetHandle() != nullptr) {
+    UnregisterHotKey(GetHandle(), kHotkeyId);
+    hotkey_registered_ = false;
+  }
   RemoveTrayIcon();
   window_channel_.reset();
   clipboard_channel_.reset();
@@ -294,6 +440,20 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
         case kTrayMenuExitId:
           ExitApplication();
           return 0;
+      }
+      break;
+
+    case WM_TIMER:
+      if (wparam == kForegroundTimerId) {
+        UpdateForegroundCapture();
+        return 0;
+      }
+      break;
+
+    case WM_HOTKEY:
+      if (wparam == kHotkeyId) {
+        ToggleWindowVisibility();
+        return 0;
       }
       break;
 
@@ -428,4 +588,187 @@ void FlutterWindow::ExitApplication() {
   if (GetHandle() != nullptr) {
     DestroyWindow(GetHandle());
   }
+}
+
+void FlutterWindow::UpdateForegroundCapture() {
+  const HWND foreground = GetForegroundWindow();
+  if (foreground == nullptr || foreground == GetHandle()) {
+    return;
+  }
+  if (foreground == last_seen_foreground_) {
+    return;
+  }
+  last_seen_foreground_ = foreground;
+  if (!IsCapturableForegroundWindow(foreground)) {
+    return;
+  }
+  last_external_foreground_ = foreground;
+  last_external_process_name_ = GetWindowProcessName(foreground);
+}
+
+bool FlutterWindow::IsCapturableForegroundWindow(HWND hwnd) {
+  wchar_t class_name[64] = {};
+  if (GetClassNameW(hwnd, class_name, 64) == 0) {
+    return false;
+  }
+  const std::wstring class_name_string(class_name);
+  return class_name_string != L"Shell_TrayWnd" &&
+         class_name_string != L"Shell_SecondaryTrayWnd" &&
+         class_name_string != L"Progman" && class_name_string != L"WorkerW";
+}
+
+std::wstring FlutterWindow::GetWindowProcessName(HWND hwnd) {
+  DWORD process_id = 0;
+  GetWindowThreadProcessId(hwnd, &process_id);
+  if (process_id == 0) {
+    return std::wstring();
+  }
+
+  const HANDLE process =
+      OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
+  if (process == nullptr) {
+    return std::wstring();
+  }
+
+  wchar_t path[MAX_PATH] = {};
+  DWORD path_length = MAX_PATH;
+  std::wstring name;
+  if (QueryFullProcessImageNameW(process, 0, path, &path_length) &&
+      path_length > 0) {
+    name.assign(path, path_length);
+    const size_t separator = name.find_last_of(L'\\');
+    if (separator != std::wstring::npos) {
+      name.erase(0, separator + 1);
+    }
+    CharLowerBuffW(name.data(), static_cast<DWORD>(name.size()));
+  }
+  CloseHandle(process);
+  return name;
+}
+
+bool FlutterWindow::SetHotkey(bool enabled, UINT modifiers, UINT key_code) {
+  if ((modifiers & kHotkeyModifierMask) == 0 || key_code < 0x08 ||
+      key_code > 0xFE) {
+    return false;
+  }
+
+  if (hotkey_registered_ && GetHandle() != nullptr) {
+    UnregisterHotKey(GetHandle(), kHotkeyId);
+    hotkey_registered_ = false;
+  }
+  hotkey_modifiers_ = modifiers & kHotkeyModifierMask;
+  hotkey_key_code_ = key_code;
+  if (!enabled) {
+    return true;
+  }
+  if (GetHandle() == nullptr) {
+    return false;
+  }
+  hotkey_registered_ =
+      RegisterHotKey(GetHandle(), kHotkeyId,
+                     hotkey_modifiers_ | MOD_NOREPEAT, hotkey_key_code_);
+  return hotkey_registered_;
+}
+
+bool FlutterWindow::CopyImageToClipboard(int width, int height,
+                                         const std::vector<uint8_t>& rgba,
+                                         bool paste, bool* pasted) {
+  *pasted = false;
+  if (width <= 0 || height <= 0) {
+    return false;
+  }
+  const size_t pixel_bytes = static_cast<size_t>(width) * height * 4;
+  if (rgba.size() < pixel_bytes) {
+    return false;
+  }
+
+  const size_t total_size = sizeof(BITMAPINFOHEADER) + pixel_bytes;
+  HGLOBAL handle = GlobalAlloc(GMEM_MOVEABLE, total_size);
+  if (handle == nullptr) {
+    return false;
+  }
+
+  auto* memory = static_cast<BYTE*>(GlobalLock(handle));
+  if (memory == nullptr) {
+    GlobalFree(handle);
+    return false;
+  }
+
+  auto* header = reinterpret_cast<BITMAPINFOHEADER*>(memory);
+  ZeroMemory(header, sizeof(BITMAPINFOHEADER));
+  header->biSize = sizeof(BITMAPINFOHEADER);
+  header->biWidth = width;
+  header->biHeight = height;  // Positive: bottom-up rows.
+  header->biPlanes = 1;
+  header->biBitCount = 32;
+  header->biCompression = BI_RGB;
+  header->biSizeImage = static_cast<DWORD>(pixel_bytes);
+
+  BYTE* pixels = memory + sizeof(BITMAPINFOHEADER);
+  for (int y = 0; y < height; ++y) {
+    const BYTE* source =
+        rgba.data() + static_cast<size_t>(height - 1 - y) * width * 4;
+    BYTE* destination = pixels + static_cast<size_t>(y) * width * 4;
+    for (int x = 0; x < width; ++x) {
+      // RGBA -> BGRA.
+      destination[0] = source[2];
+      destination[1] = source[1];
+      destination[2] = source[0];
+      destination[3] = source[3];
+      source += 4;
+      destination += 4;
+    }
+  }
+  GlobalUnlock(handle);
+
+  if (!OpenClipboard(GetHandle())) {
+    GlobalFree(handle);
+    return false;
+  }
+  EmptyClipboard();
+  const HANDLE placed = SetClipboardData(CF_DIB, handle);
+  CloseClipboard();
+  if (placed == nullptr) {
+    GlobalFree(handle);
+    return false;
+  }
+
+  if (paste) {
+    *pasted = PasteToPreviousWindow();
+  }
+  return true;
+}
+
+bool FlutterWindow::PasteToPreviousWindow() {
+  const std::wstring expected_process = last_external_process_name_;
+  ShowWindow(GetHandle(), SW_HIDE);
+
+  HWND target = nullptr;
+  for (int attempt = 0; attempt < 25; ++attempt) {
+    Sleep(20);
+    target = GetForegroundWindow();
+    if (target != nullptr && target != GetHandle()) {
+      break;
+    }
+  }
+
+  if (target == nullptr || target == GetHandle()) {
+    if (last_external_foreground_ != nullptr &&
+        IsWindow(last_external_foreground_)) {
+      SetForegroundWindow(last_external_foreground_);
+      Sleep(80);
+      target = GetForegroundWindow();
+    }
+  }
+
+  if (target == nullptr || target == GetHandle()) {
+    return false;
+  }
+  if (!expected_process.empty() &&
+      GetWindowProcessName(target) != expected_process) {
+    return false;
+  }
+
+  SendCtrlV();
+  return true;
 }

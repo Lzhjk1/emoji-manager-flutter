@@ -43,6 +43,11 @@ class EmojiManagerController extends ChangeNotifier {
   Map<String, List<EmojiItem>> _itemsByCategory = {};
   Map<String, CategoryMetadata> _categoryMetadata = {};
   List<String> _recentUsage = [];
+  List<String> _autoPasteProcesses = const [];
+  bool _hotkeyEnabled = true;
+  int _hotkeyModifiers = WindowControlService.hotkeyModifierControl |
+      WindowControlService.hotkeyModifierShift;
+  int _hotkeyKeyCode = 0x56; // 'V'
 
   bool get loading => _loading;
   String? get rootPath => _rootPath;
@@ -56,6 +61,11 @@ class EmojiManagerController extends ChangeNotifier {
   bool get alwaysOnTop => _alwaysOnTop;
   List<String> get ignoredDirectories =>
       List<String>.unmodifiable(_ignoredDirectories);
+  List<String> get autoPasteProcesses =>
+      List<String>.unmodifiable(_autoPasteProcesses);
+  bool get hotkeyEnabled => _hotkeyEnabled;
+  int get hotkeyModifiers => _hotkeyModifiers;
+  int get hotkeyKeyCode => _hotkeyKeyCode;
   List<String> get categories => _itemsByCategory.keys.toList(growable: false);
   bool get hasData => _itemsByCategory.isNotEmpty;
 
@@ -142,8 +152,13 @@ class EmojiManagerController extends ChangeNotifier {
     _alwaysOnTop = await _settingsService.loadAlwaysOnTop();
     _ignoredDirectories = await _settingsService.loadIgnoredDirectories();
     _recentUsage = await _settingsService.loadRecentUsage();
+    _autoPasteProcesses = await _settingsService.loadAutoPasteProcesses();
+    _hotkeyEnabled = await _settingsService.loadHotkeyEnabled();
+    _hotkeyModifiers = await _settingsService.loadHotkeyModifiers();
+    _hotkeyKeyCode = await _settingsService.loadHotkeyKeyCode();
     _rootPath = await _settingsService.loadRootPath();
     await _applyWindowSettings();
+    await _applyHotkeySettings();
 
     if (_rootPath == null || _rootPath!.isEmpty) {
       _loadingMessage = null;
@@ -325,6 +340,80 @@ class EmojiManagerController extends ChangeNotifier {
     _ignoredDirectories = normalized;
     await _settingsService.saveIgnoredDirectories(normalized);
     await rescan();
+  }
+
+  Future<void> setAutoPasteProcessesFromText(String value) async {
+    final normalized = value
+        .split(RegExp(r'[\n,;]'))
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+
+    if (listEquals(_autoPasteProcesses, normalized)) {
+      return;
+    }
+
+    _autoPasteProcesses = normalized;
+    await _settingsService.saveAutoPasteProcesses(normalized);
+    notifyListeners();
+  }
+
+  bool matchesAutoPasteTarget(String processName) {
+    if (processName.isEmpty || _autoPasteProcesses.isEmpty) {
+      return false;
+    }
+    final target = normalizeProcessName(processName);
+    if (target.isEmpty) {
+      return false;
+    }
+    return _autoPasteProcesses
+        .any((entry) => normalizeProcessName(entry) == target);
+  }
+
+  static String normalizeProcessName(String name) {
+    var value = name.trim().toLowerCase();
+    if (value.endsWith('.exe')) {
+      value = value.substring(0, value.length - 4);
+    }
+    return value;
+  }
+
+  Future<void> setHotkeyEnabled(bool enabled) async {
+    if (_hotkeyEnabled == enabled) {
+      return;
+    }
+    _hotkeyEnabled = enabled;
+    await _settingsService.saveHotkeyEnabled(enabled);
+    await _applyHotkeySettings();
+    notifyListeners();
+  }
+
+  Future<void> setHotkeyBinding({
+    required int modifiers,
+    required int keyCode,
+  }) async {
+    if (_hotkeyModifiers == modifiers && _hotkeyKeyCode == keyCode) {
+      return;
+    }
+    _hotkeyModifiers = modifiers;
+    _hotkeyKeyCode = keyCode;
+    await _settingsService.saveHotkeyModifiers(modifiers);
+    await _settingsService.saveHotkeyKeyCode(keyCode);
+    await _applyHotkeySettings();
+    notifyListeners();
+  }
+
+  Future<void> _applyHotkeySettings() {
+    if (!WindowControlService.isSupported) {
+      return Future.value();
+    }
+    return WindowControlService.setHotkey(
+      enabled: _hotkeyEnabled,
+      modifiers: _hotkeyModifiers,
+      keyCode: _hotkeyKeyCode,
+    );
   }
 
   int? indexOfItemInCategory(String itemPath) {

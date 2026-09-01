@@ -6,7 +6,9 @@
 #include <flutter/method_channel.h>
 #include <flutter/encodable_value.h>
 
+#include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "win32_window.h"
 
@@ -35,6 +37,14 @@ class FlutterWindow : public Win32Window {
   void EnsureTrayIcon();
   void RemoveTrayIcon();
   void ExitApplication();
+  void UpdateForegroundCapture();
+  bool SetHotkey(bool enabled, UINT modifiers, UINT key_code);
+  bool CopyImageToClipboard(int width, int height,
+                            const std::vector<uint8_t>& rgba, bool paste,
+                            bool* pasted);
+  bool PasteToPreviousWindow();
+  static std::wstring GetWindowProcessName(HWND hwnd);
+  static bool IsCapturableForegroundWindow(HWND hwnd);
 
   // The project to run.
   flutter::DartProject project_;
@@ -50,6 +60,13 @@ class FlutterWindow : public Win32Window {
   bool force_close_ = false;
   bool tray_icon_added_ = false;
   NOTIFYICONDATA tray_icon_data_ = {};
+
+  UINT hotkey_modifiers_ = MOD_CONTROL | MOD_SHIFT;
+  UINT hotkey_key_code_ = 0x56;  // 'V'
+  bool hotkey_registered_ = false;
+  HWND last_seen_foreground_ = nullptr;
+  HWND last_external_foreground_ = nullptr;
+  std::wstring last_external_process_name_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

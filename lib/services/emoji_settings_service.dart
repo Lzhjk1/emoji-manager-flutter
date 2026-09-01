@@ -11,6 +11,10 @@ class EmojiSettingsService {
   static const _alwaysOnTopKey = 'always_on_top';
   static const _ignoredDirectoriesKey = 'ignored_directories';
   static const _recentUsageKey = 'emoji_recent_usage';
+  static const _autoPasteProcessesKey = 'auto_paste_processes';
+  static const _hotkeyEnabledKey = 'hotkey_enabled';
+  static const _hotkeyModifiersKey = 'hotkey_modifiers';
+  static const _hotkeyKeyCodeKey = 'hotkey_key_code';
 
   Future<String?> loadRootPath() async {
     final prefs = await SharedPreferences.getInstance();
@@ -82,5 +86,45 @@ class EmojiSettingsService {
   Future<void> saveRecentUsage(List<String> paths) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(_recentUsageKey, paths);
+  }
+
+  Future<List<String>> loadAutoPasteProcesses() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getStringList(_autoPasteProcessesKey) ?? const ['QQ.exe'];
+  }
+
+  Future<void> saveAutoPasteProcesses(List<String> processes) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_autoPasteProcessesKey, processes);
+  }
+
+  Future<bool> loadHotkeyEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_hotkeyEnabledKey) ?? true;
+  }
+
+  Future<void> saveHotkeyEnabled(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_hotkeyEnabledKey, value);
+  }
+
+  Future<int> loadHotkeyModifiers() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_hotkeyModifiersKey) ?? 0x6; // Ctrl + Shift
+  }
+
+  Future<void> saveHotkeyModifiers(int modifiers) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_hotkeyModifiersKey, modifiers);
+  }
+
+  Future<int> loadHotkeyKeyCode() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_hotkeyKeyCodeKey) ?? 0x56; // 'V'
+  }
+
+  Future<void> saveHotkeyKeyCode(int keyCode) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_hotkeyKeyCodeKey, keyCode);
   }
 }

@@ -12,6 +12,7 @@ import '../models/emoji_item.dart';
 import '../models/sort_order.dart';
 import '../services/emoji_thumbnail_service.dart';
 import '../services/platform_emoji_clipboard_service.dart';
+import '../services/window_control_service.dart';
 import '../widgets/emoji_preview_dialog.dart';
 
 class EmojiHomePage extends StatefulWidget {
@@ -424,9 +425,49 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     await _controller.rescan();
   }
 
+  static final List<int> _hotkeyKeyCodeItems = [
+    ...List.generate(26, (index) => 0x41 + index), // A-Z
+    ...List.generate(10, (index) => 0x30 + index), // 0-9
+    ...List.generate(12, (index) => 0x70 + index), // F1-F12
+  ];
+
+  static String _virtualKeyLabel(int keyCode) {
+    if (keyCode >= 0x41 && keyCode <= 0x5A) {
+      return String.fromCharCode(keyCode);
+    }
+    if (keyCode >= 0x30 && keyCode <= 0x39) {
+      return String.fromCharCode(keyCode);
+    }
+    if (keyCode >= 0x70 && keyCode <= 0x7B) {
+      return 'F${keyCode - 0x6F}';
+    }
+    return '0x${keyCode.toRadixString(16)}';
+  }
+
+  static String _hotkeyLabel(int modifiers, int keyCode) {
+    final parts = <String>[];
+    if ((modifiers & WindowControlService.hotkeyModifierControl) != 0) {
+      parts.add('Ctrl');
+    }
+    if ((modifiers & WindowControlService.hotkeyModifierShift) != 0) {
+      parts.add('Shift');
+    }
+    if ((modifiers & WindowControlService.hotkeyModifierAlt) != 0) {
+      parts.add('Alt');
+    }
+    if ((modifiers & WindowControlService.hotkeyModifierWin) != 0) {
+      parts.add('Win');
+    }
+    parts.add(_virtualKeyLabel(keyCode));
+    return parts.join(' + ');
+  }
+
   Future<void> _showSettingsSheet() async {
     final ignoreDirectoriesController = TextEditingController(
       text: _controller.ignoredDirectories.join(', '),
+    );
+    final autoPasteController = TextEditingController(
+      text: _controller.autoPasteProcesses.join(', '),
     );
     try {
       await showModalBottomSheet<void>(
@@ -517,6 +558,127 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                         ),
                         const SizedBox(height: 24),
                         Text(
+                          '自动粘贴',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          '唤起本窗口时记录前置应用：若其进程名在列表中，点击表情会以位图（CF_DIB，非 PNG/文件）复制，并自动粘贴回该应用窗口。留空表示关闭自动粘贴。',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: Colors.white54),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: autoPasteController,
+                          minLines: 2,
+                          maxLines: 4,
+                          decoration: const InputDecoration(
+                            hintText: '例如：QQ.exe, Weixin.exe',
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        FilledButton.tonalIcon(
+                          onPressed: () async {
+                            await _controller
+                                .setAutoPasteProcessesFromText(
+                              autoPasteController.text,
+                            );
+                            if (!context.mounted) {
+                              return;
+                            }
+                            ScaffoldMessenger.of(context)
+                                .hideCurrentSnackBar();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('已更新自动粘贴应用列表'),
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.bookmark_added_outlined),
+                          label: const Text('保存自动粘贴应用'),
+                        ),
+                        const SizedBox(height: 24),
+                        Text(
+                          '全局快捷键',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Switch(
+                              value: _controller.hotkeyEnabled,
+                              onChanged: (value) =>
+                                  _controller.setHotkeyEnabled(value),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '${_hotkeyLabel(_controller.hotkeyModifiers, _controller.hotkeyKeyCode)} 显示/隐藏窗口',
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            for (final entry in const {
+                              'Ctrl': WindowControlService.hotkeyModifierControl,
+                              'Shift': WindowControlService.hotkeyModifierShift,
+                              'Alt': WindowControlService.hotkeyModifierAlt,
+                              'Win': WindowControlService.hotkeyModifierWin,
+                            }.entries)
+                              FilterChip(
+                                label: Text(entry.key),
+                                selected: (_controller.hotkeyModifiers &
+                                        entry.value) !=
+                                    0,
+                                onSelected: (selected) {
+                                  var modifiers =
+                                      _controller.hotkeyModifiers;
+                                  modifiers = selected
+                                      ? (modifiers | entry.value)
+                                      : (modifiers & ~entry.value);
+                                  if ((modifiers & 0xF) == 0) {
+                                    modifiers |=
+                                        WindowControlService
+                                            .hotkeyModifierControl;
+                                  }
+                                  _controller.setHotkeyBinding(
+                                    modifiers: modifiers,
+                                    keyCode: _controller.hotkeyKeyCode,
+                                  );
+                                },
+                              ),
+                            const SizedBox(width: 4),
+                            DropdownButton<int>(
+                              value: _hotkeyKeyCodeItems
+                                      .contains(_controller.hotkeyKeyCode)
+                                  ? _controller.hotkeyKeyCode
+                                  : 0x56,
+                              items: [
+                                for (final keyCode in _hotkeyKeyCodeItems)
+                                  DropdownMenuItem<int>(
+                                    value: keyCode,
+                                    child: Text(_virtualKeyLabel(keyCode)),
+                                  ),
+                              ],
+                              onChanged: (value) {
+                                if (value == null) {
+                                  return;
+                                }
+                                _controller.setHotkeyBinding(
+                                  modifiers: _controller.hotkeyModifiers,
+                                  keyCode: value,
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 24),
+                        Text(
                           '扫描例外',
                           style: Theme.of(context).textTheme.titleMedium,
                         ),
@@ -601,6 +763,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
       );
     } finally {
       ignoreDirectoriesController.dispose();
+      autoPasteController.dispose();
     }
   }
 
@@ -636,6 +799,23 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
   }
 
   Future<void> _handleEmojiTap(EmojiItem item) async {
+    if (Platform.isWindows && _controller.autoPasteProcesses.isNotEmpty) {
+      final processName = await WindowControlService
+          .getPreviousForegroundProcessName();
+      if (processName != null &&
+          _controller.matchesAutoPasteTarget(processName)) {
+        final handled =
+            await PlatformEmojiClipboardService.copyImageAndPaste(item.path);
+        if (!mounted) {
+          return;
+        }
+        if (handled) {
+          unawaited(_controller.recordUsage(item.path));
+          return;
+        }
+      }
+    }
+
     final copied = await PlatformEmojiClipboardService.copyFile(item.path);
     if (!mounted) {
       return;
