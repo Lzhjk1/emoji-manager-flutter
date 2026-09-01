@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 
@@ -72,35 +73,16 @@ class EmojiThumbnailService {
 
     try {
       if (needsUpdate) {
-        final sourceBytes = await File(filePath).readAsBytes();
-        final decoded = img.decodeImage(sourceBytes);
-        if (decoded == null) {
+        final encoded = await compute(
+          _generateThumbnailBytes,
+          filePath,
+        );
+        if (encoded == null) {
           return null;
         }
 
-        final cropSize = decoded.width < decoded.height
-            ? decoded.width
-            : decoded.height;
-        final cropX = ((decoded.width - cropSize) / 2).floor();
-        final cropY = ((decoded.height - cropSize) / 2).floor();
-        final cropped = img.copyCrop(
-          decoded,
-          x: cropX,
-          y: cropY,
-          width: cropSize,
-          height: cropSize,
-        );
-        final resized = img.copyResize(
-          cropped,
-          width: thumbnailMaxSize,
-          height: thumbnailMaxSize,
-          interpolation: img.Interpolation.linear,
-        );
         await thumbnailFile.parent.create(recursive: true);
-        await thumbnailFile.writeAsBytes(
-          img.encodeJpg(resized, quality: thumbnailQuality),
-          flush: true,
-        );
+        await thumbnailFile.writeAsBytes(encoded, flush: true);
         if (needsPathMigration) {
           final previousFile = File(
             p.join(rootPath, previousThumbnailRelativePath),
@@ -210,5 +192,45 @@ class ThumbnailEntry {
       'sourceModified': sourceModified,
       'thumbnailRelativePath': thumbnailRelativePath,
     };
+  }
+}
+
+/// Reads and decodes [filePath] in a background isolate, then crops, resizes
+/// and JPEG-encodes the thumbnail there so the heavy bitmap buffers are
+/// released with the isolate instead of growing the main heap.
+Uint8List? _generateThumbnailBytes(String filePath) {
+  try {
+    final sourceBytes = File(filePath).readAsBytesSync();
+    final decoded = img.decodeImage(sourceBytes);
+    if (decoded == null) {
+      return null;
+    }
+
+    final cropSize = decoded.width < decoded.height
+        ? decoded.width
+        : decoded.height;
+    final cropX = ((decoded.width - cropSize) / 2).floor();
+    final cropY = ((decoded.height - cropSize) / 2).floor();
+    final cropped = img.copyCrop(
+      decoded,
+      x: cropX,
+      y: cropY,
+      width: cropSize,
+      height: cropSize,
+    );
+    final resized = img.copyResize(
+      cropped,
+      width: EmojiThumbnailService.thumbnailMaxSize,
+      height: EmojiThumbnailService.thumbnailMaxSize,
+      interpolation: img.Interpolation.linear,
+    );
+    return Uint8List.fromList(
+      img.encodeJpg(
+        resized,
+        quality: EmojiThumbnailService.thumbnailQuality,
+      ),
+    );
+  } catch (_) {
+    return null;
   }
 }

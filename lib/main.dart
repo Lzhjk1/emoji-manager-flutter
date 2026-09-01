@@ -5,7 +5,7 @@ import 'app.dart';
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   final imageCache = PaintingBinding.instance.imageCache;
-  imageCache.maximumSize = 300;
-  imageCache.maximumSizeBytes = 96 << 20;
+  imageCache.maximumSize = 64;
+  imageCache.maximumSizeBytes = 24 << 20;
   runApp(const MyApp());
 }
