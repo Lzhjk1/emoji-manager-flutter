@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 
@@ -7,6 +8,16 @@ import '../models/emoji_item.dart';
 import '../models/emoji_scan_result.dart';
 import '../models/sort_order.dart';
 import 'emoji_thumbnail_service.dart';
+
+class ImportResult {
+  const ImportResult({
+    required this.imported,
+    required this.skipped,
+  });
+
+  final List<EmojiItem> imported;
+  final int skipped;
+}
 
 class EmojiRepository {
   EmojiRepository({
@@ -316,6 +327,211 @@ class EmojiRepository {
 
   bool _isImageFile(String filePath) {
     return _imageExtensions.contains(p.extension(filePath).toLowerCase());
+  }
+
+  /// Imports dropped files/folders into the directory backing [category].
+  /// Folders are expanded recursively; non-image files are skipped.
+  Future<ImportResult> importDroppedPaths({
+    required String rootPath,
+    required String category,
+    required List<String> paths,
+  }) async {
+    final imagePaths = <String>[];
+    for (final path in paths) {
+      final type = FileSystemEntity.typeSync(path);
+      if (type == FileSystemEntityType.directory) {
+        imagePaths.addAll(_collectImagePathsInDirectory(Directory(path)));
+      } else if (type == FileSystemEntityType.file) {
+        imagePaths.add(path);
+      }
+    }
+
+    final imported = <EmojiItem>[];
+    var skipped = 0;
+    for (final path in imagePaths) {
+      final item = await _importImageToCategory(
+        rootPath: rootPath,
+        category: category,
+        sourcePath: path,
+      );
+      if (item == null) {
+        skipped += 1;
+      } else {
+        imported.add(item);
+      }
+    }
+    return ImportResult(imported: imported, skipped: skipped);
+  }
+
+  List<String> _collectImagePathsInDirectory(Directory directory) {
+    final result = <String>[];
+    for (final child in directory.listSync()) {
+      final name = p.basename(child.path);
+      if (child is Directory) {
+        // Skip hidden folders such as .sync / cache directories.
+        if (name.startsWith('.')) {
+          continue;
+        }
+        result.addAll(_collectImagePathsInDirectory(child));
+      } else if (child is File && _isImageFile(child.path)) {
+        result.add(child.path);
+      }
+    }
+    return result;
+  }
+
+  /// Copies a dropped image file into the directory backing [category] and
+  /// returns the resulting [EmojiItem]. The real format is sniffed from the
+  /// file header because drag sources (e.g. QQ) often hand out temp files
+  /// whose extension does not match the content. When the source file already
+  /// lives in the target directory it is reused in place instead of being
+  /// copied. Returns null when the source is missing or is not a supported
+  /// image.
+  Future<EmojiItem?> _importImageToCategory({
+    required String rootPath,
+    required String category,
+    required String sourcePath,
+  }) async {
+    final sourceFile = File(sourcePath);
+    if (!sourceFile.existsSync()) {
+      return null;
+    }
+    final detectedExtension = await _detectImageFormat(sourceFile);
+    if (detectedExtension == null) {
+      return null;
+    }
+
+    final categoryDirectory = _resolveCategoryDirectory(rootPath, category);
+    await categoryDirectory.create(recursive: true);
+
+    String targetPath;
+    String resultExtension;
+    if (_isInsideDirectory(sourcePath, categoryDirectory.path)) {
+      // Reused in place: keep the on-disk name so it stays consistent with the
+      // directory scanner (which keys off the file extension).
+      targetPath = sourceFile.path;
+      resultExtension = p.extension(sourceFile.path).toLowerCase();
+    } else {
+      targetPath = _reserveTargetPath(
+        categoryDirectory.path,
+        sourceFile,
+        detectedExtension,
+      );
+      await sourceFile.copy(targetPath);
+      resultExtension = detectedExtension;
+    }
+
+    final thumbnailIndex = await _thumbnailService.loadIndex(rootPath);
+    final lastModified = File(targetPath).statSync().modified.millisecondsSinceEpoch;
+    final relativeSourcePath = p.relative(targetPath, from: rootPath);
+    final thumbnailPath = await _thumbnailService.ensureThumbnail(
+      rootPath: rootPath,
+      filePath: targetPath,
+      sourceModified: lastModified,
+      index: thumbnailIndex,
+    );
+    await _thumbnailService.saveIndex(
+      rootPath: rootPath,
+      index: thumbnailIndex,
+      activeSourcePaths: {...thumbnailIndex.keys, relativeSourcePath},
+    );
+
+    final mimeType = switch (resultExtension) {
+      '.gif' => 'image/gif',
+      '.png' => 'image/png',
+      '.webp' => 'image/webp',
+      '.bmp' => 'image/bmp',
+      _ => 'image/jpeg',
+    };
+
+    return EmojiItem(
+      path: targetPath,
+      name: p.basename(targetPath),
+      mimeType: mimeType,
+      category: category,
+      lastModified: lastModified,
+      thumbnailPath: thumbnailPath,
+    );
+  }
+
+  bool _isInsideDirectory(String filePath, String directoryPath) {
+    return p.equals(
+      p.dirname(p.canonicalize(filePath)),
+      p.canonicalize(directoryPath),
+    );
+  }
+
+  /// Sniffs the real image format from the file header. Returns the canonical
+  /// extension (e.g. `.gif`) or null when the content is not a supported
+  /// image. Drag sources such as QQ hand out temp files whose extension lies
+  /// about the actual bytes, so the name alone cannot be trusted.
+  Future<String?> _detectImageFormat(File file) async {
+    final RandomAccessFile raf;
+    try {
+      raf = await file.open();
+    } catch (_) {
+      return null;
+    }
+    try {
+      final header = Uint8List(16);
+      final bytesRead = await raf.readInto(header, 0, 16);
+      if (bytesRead < 12) {
+        return null;
+      }
+      if (header[0] == 0x89 &&
+          header[1] == 0x50 &&
+          header[2] == 0x4E &&
+          header[3] == 0x47) {
+        return '.png';
+      }
+      if (header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF) {
+        return '.jpg';
+      }
+      if (header[0] == 0x47 &&
+          header[1] == 0x49 &&
+          header[2] == 0x46 &&
+          header[3] == 0x38 &&
+          (header[4] == 0x37 || header[4] == 0x39) &&
+          header[5] == 0x61) {
+        return '.gif';
+      }
+      if (header[0] == 0x42 && header[1] == 0x4D) {
+        return '.bmp';
+      }
+      // RIFF....WEBP
+      if (header[0] == 0x52 &&
+          header[1] == 0x49 &&
+          header[2] == 0x46 &&
+          header[3] == 0x46 &&
+          header[8] == 0x57 &&
+          header[9] == 0x45 &&
+          header[10] == 0x42 &&
+          header[11] == 0x50) {
+        return '.webp';
+      }
+      // ISO-BMFF variant: ....ftypimage/heic etc. — not supported, reject.
+      return null;
+    } finally {
+      await raf.close();
+    }
+  }
+
+  /// Picks a non-colliding destination path, appending ` (1)`, ` (2)`, ...
+  /// before the extension when the name is already taken. The extension comes
+  /// from content detection rather than the (possibly wrong) source name.
+  String _reserveTargetPath(
+    String directoryPath,
+    File sourceFile,
+    String extension,
+  ) {
+    final baseName = p.basenameWithoutExtension(sourceFile.path);
+    var candidate = p.join(directoryPath, '$baseName$extension');
+    var suffix = 1;
+    while (File(candidate).existsSync()) {
+      candidate = p.join(directoryPath, '$baseName ($suffix)$extension');
+      suffix += 1;
+    }
+    return candidate;
   }
 
   /// Force-regenerates the thumbnail for a single image and returns the

@@ -461,6 +461,45 @@ class EmojiManagerController extends ChangeNotifier {
     }
   }
 
+  /// Whether dropped images can be added to the currently selected view.
+  /// Virtual views (recent / all) have no target folder on disk.
+  bool get canAcceptDroppedImages {
+    final category = _selectedCategory;
+    return category != null &&
+        !_isSpecialView &&
+        _rootPath != null &&
+        _rootPath!.isNotEmpty;
+  }
+
+  /// Imports dropped files/folders into the currently selected category.
+  /// Returns the import outcome, or null when the current view cannot accept
+  /// drops. Callers should surface the result to the user.
+  Future<ImportResult?> addImagesToCurrentCategory(List<String> paths) async {
+    final category = _selectedCategory;
+    final currentRootPath = _rootPath;
+    if (!canAcceptDroppedImages || paths.isEmpty) {
+      return null;
+    }
+
+    final result = await _repository.importDroppedPaths(
+      rootPath: currentRootPath!,
+      category: category!,
+      paths: paths,
+    );
+    if (result.imported.isEmpty) {
+      return result;
+    }
+
+    final existing = _itemsByCategory[category] ?? const <EmojiItem>[];
+    final existingPaths = existing.map((item) => item.path).toSet();
+    final fresh =
+        result.imported.where((item) => !existingPaths.contains(item.path));
+    _itemsByCategory[category] = [...fresh, ...existing];
+    await _saveCache();
+    notifyListeners();
+    return result;
+  }
+
   /// Regenerates the cached thumbnail of a single image. Returns false when
   /// the item cannot be found or the thumbnail could not be rebuilt.
   Future<bool> refreshThumbnail(String itemPath) async {

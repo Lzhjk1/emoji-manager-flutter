@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:io';
+import 'dart:ui' as ui;
 
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -26,6 +28,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
   late final EmojiManagerController _controller;
   final TextEditingController _searchController = TextEditingController();
   final ScrollController _categoryScrollController = ScrollController();
+  bool _dragging = false;
 
   @override
   void initState() {
@@ -134,41 +137,160 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
             ),
           ),
         Expanded(
-          child: Listener(
-            onPointerSignal: _handlePointerSignal,
-            child: _controller.visibleItems.isEmpty
-                ? _buildEmptyCategoryState()
-                : GridView.builder(
-                    gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                      maxCrossAxisExtent: _controller.gridThumbnailSize,
-                      mainAxisSpacing: 8,
-                      crossAxisSpacing: 8,
-                      childAspectRatio: 1.0,
-                    ),
-                    itemCount: _controller.visibleItems.length,
-                    itemBuilder: (context, index) {
-                      final item = _controller.visibleItems[index];
-                      return Tooltip(
-                        message: item.name,
-                        excludeFromSemantics: true,
-                        child: ImageCard(
-                          width: double.infinity,
-                          height: double.infinity,
-                          imageProvider: _imageProviderFor(item),
-                          title: item.name,
-                          showText: false,
-                          showBottomOverlay: false,
-                          onTap: () => _handleEmojiTap(item),
-                          onLongPress: () => _showPreview(item),
-                          onSecondaryTapUp: (details) =>
-                              _showItemMenu(item, details.globalPosition),
-                        ),
-                      );
-                    },
+          child: DropTarget(
+            onDragEntered: (_) {
+              if (mounted) {
+                setState(() => _dragging = true);
+              }
+            },
+            onDragExited: (_) {
+              if (mounted) {
+                setState(() => _dragging = false);
+              }
+            },
+            onDragDone: _handleImageDrop,
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: Listener(
+                    onPointerSignal: _handlePointerSignal,
+                    child: _controller.visibleItems.isEmpty
+                        ? _buildEmptyCategoryState()
+                        : GridView.builder(
+                            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                              maxCrossAxisExtent: _controller.gridThumbnailSize,
+                              mainAxisSpacing: 8,
+                              crossAxisSpacing: 8,
+                              childAspectRatio: 1.0,
+                            ),
+                            itemCount: _controller.visibleItems.length,
+                            itemBuilder: (context, index) {
+                              final item = _controller.visibleItems[index];
+                              return Tooltip(
+                                message: item.name,
+                                excludeFromSemantics: true,
+                                child: ImageCard(
+                                  width: double.infinity,
+                                  height: double.infinity,
+                                  imageProvider: _imageProviderFor(item),
+                                  title: item.name,
+                                  showText: false,
+                                  showBottomOverlay: false,
+                                  onTap: () => _handleEmojiTap(item),
+                                  onLongPress: () => _showPreview(item),
+                                  onSecondaryTapUp: (details) =>
+                                      _showItemMenu(item, details.globalPosition),
+                                ),
+                              );
+                            },
+                          ),
                   ),
+                ),
+                if (_dragging) _buildDropOverlay(context),
+              ],
+            ),
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildDropOverlay(BuildContext context) {
+    final accepted = _controller.canAcceptDroppedImages;
+    final color = accepted ? Theme.of(context).colorScheme.primary : Colors.orange;
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: BackdropFilter(
+            // 模糊底层网格；即使个别显卡驱动下模糊失效，下方深色遮罩仍能保证可读性
+            filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: color, width: 2),
+              ),
+              alignment: Alignment.center,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    accepted ? Icons.add_photo_alternate_outlined : Icons.block,
+                    size: 44,
+                    color: color,
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.55),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      accepted
+                          ? '松开以添加到当前分类「${_controller.selectedCategory ?? ''}」'
+                          : '「最近使用」和「全部」视图不支持拖入添加',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handleImageDrop(DropDoneDetails details) async {
+    if (mounted) {
+      setState(() => _dragging = false);
+    }
+    final paths = details.files
+        .map((file) => file.path)
+        .where((path) => path.isNotEmpty)
+        .toList();
+    if (paths.isEmpty) {
+      return;
+    }
+
+    final messenger = ScaffoldMessenger.of(context);
+    if (!_controller.canAcceptDroppedImages) {
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('请先切换到一个具体分类再拖入图片'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    final result = await _controller.addImagesToCurrentCategory(paths);
+    if (!mounted) {
+      return;
+    }
+    final added = result?.imported.length ?? 0;
+    final skipped = result?.skipped ?? 0;
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          added == 0
+              ? '拖入的内容中没有可用的图片'
+              : (skipped > 0
+                  ? '已添加 $added 张图片，跳过 $skipped 项'
+                  : '已添加 $added 张图片到「${_controller.selectedCategory ?? ''}」'),
+        ),
+        duration: const Duration(seconds: 2),
+      ),
     );
   }
 
