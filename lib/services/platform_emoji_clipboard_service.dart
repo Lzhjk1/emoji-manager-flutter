@@ -66,6 +66,24 @@ class PlatformEmojiClipboardService {
     }
   }
 
+  /// Opens Explorer with the file at [filePath] selected. Uses the shell API
+  /// (SHOpenFolderAndSelectItems) so paths with spaces or commas work.
+  static Future<bool> revealInExplorer(String filePath) async {
+    if (kIsWeb || !Platform.isWindows) {
+      return false;
+    }
+
+    try {
+      final revealed = await _channel.invokeMethod<bool>(
+        'revealInExplorer',
+        <String, Object>{'path': filePath},
+      );
+      return revealed ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   static Future<bool> _copyFileOnWindows(String filePath) async {
     try {
       final copied = await _channel.invokeMethod<bool>(

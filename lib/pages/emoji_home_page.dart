@@ -848,28 +848,36 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
         overlay.size.width - position.dx,
         overlay.size.height - position.dy,
       ),
-      items: const [
-        PopupMenuItem<String>(
+      items: [
+        const PopupMenuItem<String>(
           value: 'copy',
           child: ListTile(
             leading: Icon(Icons.content_copy),
             title: Text('复制到剪贴板'),
           ),
         ),
-        PopupMenuItem<String>(
+        const PopupMenuItem<String>(
           value: 'preview',
           child: ListTile(
             leading: Icon(Icons.visibility_outlined),
             title: Text('预览与备注'),
           ),
         ),
-        PopupMenuItem<String>(
+        const PopupMenuItem<String>(
           value: 'refresh',
           child: ListTile(
             leading: Icon(Icons.image_outlined),
             title: Text('刷新缩略图'),
           ),
         ),
+        if (Platform.isWindows)
+          const PopupMenuItem<String>(
+            value: 'reveal',
+            child: ListTile(
+              leading: Icon(Icons.folder_open_outlined),
+              title: Text('在资源管理器中显示'),
+            ),
+          ),
       ],
     );
     if (!mounted || selected == null) {
@@ -882,7 +890,36 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
         await _showPreview(item);
       case 'refresh':
         await _refreshItemThumbnail(item);
+      case 'reveal':
+        _revealInExplorer(item);
     }
+  }
+
+  Future<void> _revealInExplorer(EmojiItem item) async {
+    final messenger = ScaffoldMessenger.of(context);
+    if (!File(item.path).existsSync()) {
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('文件已不存在'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    final revealed =
+        await PlatformEmojiClipboardService.revealInExplorer(item.path);
+    if (revealed || !mounted) {
+      return;
+    }
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      const SnackBar(
+        content: Text('无法打开资源管理器'),
+        duration: Duration(seconds: 2),
+      ),
+    );
   }
 
   Future<void> _refreshItemThumbnail(EmojiItem item) async {

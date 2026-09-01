@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <optional>
+#include <shlobj.h>
 #include <shellapi.h>
 #include <string>
 #include <vector>
@@ -323,6 +324,39 @@ bool FlutterWindow::OnCreate() {
           response[flutter::EncodableValue("pasted")] =
               flutter::EncodableValue(pasted);
           result->Success(flutter::EncodableValue(response));
+          return;
+        }
+
+        if (call.method_name() == "revealInExplorer") {
+          const auto* arguments =
+              std::get_if<flutter::EncodableMap>(call.arguments());
+          if (arguments == nullptr) {
+            result->Error("invalid_arguments", "Arguments must be a map.");
+            return;
+          }
+
+          const auto path = GetStringValue(*arguments, "path");
+          if (!path.has_value() || path->empty()) {
+            result->Error("invalid_arguments", "path is required.");
+            return;
+          }
+
+          const std::wstring file_path = Utf8ToWide(*path);
+          if (file_path.empty()) {
+            result->Success(flutter::EncodableValue(false));
+            return;
+          }
+
+          PIDLIST_ABSOLUTE pidl = nullptr;
+          if (SHParseDisplayName(file_path.c_str(), nullptr, &pidl, 0,
+                                 nullptr) == S_OK &&
+              pidl != nullptr) {
+            SHOpenFolderAndSelectItems(pidl, 0, nullptr, 0);
+            CoTaskMemFree(pidl);
+            result->Success(flutter::EncodableValue(true));
+            return;
+          }
+          result->Success(flutter::EncodableValue(false));
           return;
         }
 
