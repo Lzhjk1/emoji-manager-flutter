@@ -500,6 +500,47 @@ class EmojiManagerController extends ChangeNotifier {
     return result;
   }
 
+  /// Deletes an image file on disk (with its thumbnail and metadata entries)
+  /// and removes it from the in-memory state. Returns false when the item
+  /// cannot be found or the file could not be deleted.
+  Future<bool> deleteItem(String itemPath) async {
+    final entry = _findItemEntry(itemPath);
+    final rootPath = _rootPath;
+    if (entry == null || rootPath == null) {
+      return false;
+    }
+
+    final deleted = await _repository.deleteImage(
+      rootPath: rootPath,
+      category: entry.category,
+      item: entry.items[entry.index],
+    );
+    if (!deleted) {
+      return false;
+    }
+
+    final items = [...entry.items]..removeAt(entry.index);
+    if (items.isEmpty) {
+      _itemsByCategory.remove(entry.category);
+      if (_selectedCategory == entry.category) {
+        _selectedCategory = _itemsByCategory.isEmpty
+            ? null
+            : _itemsByCategory.keys.first;
+      }
+    } else {
+      _itemsByCategory[entry.category] = items;
+    }
+
+    if (_recentUsage.contains(itemPath)) {
+      _recentUsage =
+          _recentUsage.where((path) => path != itemPath).toList();
+      await _settingsService.saveRecentUsage(_recentUsage);
+    }
+    await _saveCache();
+    notifyListeners();
+    return true;
+  }
+
   /// Regenerates the cached thumbnail of a single image. Returns false when
   /// the item cannot be found or the thumbnail could not be rebuilt.
   Future<bool> refreshThumbnail(String itemPath) async {

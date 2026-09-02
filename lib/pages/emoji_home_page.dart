@@ -1000,6 +1000,14 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
               title: Text('在资源管理器中显示'),
             ),
           ),
+        const PopupMenuItem<String>(
+          value: 'delete',
+          child: ListTile(
+            leading: Icon(Icons.delete_outline, color: Colors.redAccent),
+            title: Text('删除这张图片',
+                style: TextStyle(color: Colors.redAccent)),
+          ),
+        ),
       ],
     );
     if (!mounted || selected == null) {
@@ -1014,7 +1022,50 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
         await _refreshItemThumbnail(item);
       case 'reveal':
         _revealInExplorer(item);
+      case 'delete':
+        await _handleDeleteItem(item);
     }
+  }
+
+  Future<void> _handleDeleteItem(EmojiItem item) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('删除图片'),
+        content: Text(
+          '确定要删除「${item.name}」吗？\n磁盘上的图片文件会被一并删除，无法恢复。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) {
+      return;
+    }
+
+    final deleted = await _controller.deleteItem(item.path);
+    if (!mounted) {
+      return;
+    }
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          deleted ? '已删除 ${item.name}' : '删除失败：文件不存在或无法删除',
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   Future<void> _revealInExplorer(EmojiItem item) async {

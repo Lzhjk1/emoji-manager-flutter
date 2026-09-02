@@ -275,6 +275,71 @@ class EmojiRepository {
     );
   }
 
+  /// Deletes the image file together with its cached thumbnail and its
+  /// entries in `emoji_remarks.json` / `emoji_image_order.json`. Returns
+  /// false when the file no longer exists or could not be deleted.
+  Future<bool> deleteImage({
+    required String rootPath,
+    required String category,
+    required EmojiItem item,
+  }) async {
+    final imageFile = File(item.path);
+    if (!imageFile.existsSync()) {
+      return false;
+    }
+
+    // 1. Remove the remark entry from the folder-local remarks file.
+    final folder = imageFile.parent;
+    final remarksFile = File(p.join(folder.path, _remarksFileName));
+    if (remarksFile.existsSync()) {
+      final remarks = await _loadRemarksForFolder(folder);
+      remarks.remove(imageFile.uri.pathSegments.last);
+      if (remarks.isEmpty) {
+        await remarksFile.delete();
+      } else {
+        await remarksFile.writeAsString(
+          const JsonEncoder.withIndent('  ').convert(remarks),
+        );
+      }
+    }
+
+    // 2. Remove the name from the category order file.
+    final orderFile = File(
+      p.join(_resolveCategoryDirectory(rootPath, category).path, _orderFileName),
+    );
+    if (orderFile.existsSync()) {
+      final order = await readOrderForCategory(rootPath, category);
+      final remaining = order.where((name) => name != item.name).toList();
+      if (remaining.length != order.length) {
+        if (remaining.isEmpty) {
+          await orderFile.delete();
+        } else {
+          await orderFile.writeAsString(
+            const JsonEncoder.withIndent('  ')
+                .convert(<String, dynamic>{'images': remaining}),
+          );
+        }
+      }
+    }
+
+    // 3. Delete the cached thumbnail and its index entry.
+    final thumbnailIndex = await _thumbnailService.loadIndex(rootPath);
+    await _thumbnailService.invalidate(
+      rootPath: rootPath,
+      filePath: item.path,
+      index: thumbnailIndex,
+    );
+    await _thumbnailService.saveIndex(
+      rootPath: rootPath,
+      index: thumbnailIndex,
+      activeSourcePaths: thumbnailIndex.keys.toSet(),
+    );
+
+    // 4. Delete the image file itself.
+    await imageFile.delete();
+    return true;
+  }
+
   Future<void> _collectImagesRecursively(
     Directory directory,
     String category,

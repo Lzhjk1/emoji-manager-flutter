@@ -288,9 +288,20 @@ bool FlutterWindow::OnCreate() {
             return;
           }
 
+          const auto paste = GetBoolValue(*arguments, "paste");
           const bool copied =
               CopyFilePathToClipboard(GetHandle(), *path);
-          result->Success(flutter::EncodableValue(copied));
+          bool pasted = false;
+          if (copied && paste.has_value() && paste.value()) {
+            pasted = PasteToPreviousWindow();
+          }
+
+          flutter::EncodableMap response;
+          response[flutter::EncodableValue("clipboard")] =
+              flutter::EncodableValue(copied);
+          response[flutter::EncodableValue("pasted")] =
+              flutter::EncodableValue(pasted);
+          result->Success(flutter::EncodableValue(response));
           return;
         }
 
@@ -773,29 +784,98 @@ bool FlutterWindow::CopyImageToClipboard(int width, int height,
   return true;
 }
 
+bool ForceActivateWindow(HWND hwnd) {
+  if (hwnd == nullptr || !IsWindow(hwnd)) {
+    return false;
+  }
+  if (IsIconic(hwnd)) {
+    ShowWindow(hwnd, SW_RESTORE);
+  }
+
+  // Attaching the input queues bypasses the foreground lock so that
+  // SetForegroundWindow succeeds when the shell (taskbar) owns the
+  // foreground instead of the target application.
+  const DWORD current_thread = GetCurrentThreadId();
+  const DWORD foreground_thread =
+      GetWindowThreadProcessId(GetForegroundWindow(), nullptr);
+  const DWORD target_thread = GetWindowThreadProcessId(hwnd, nullptr);
+  bool attached_foreground = false;
+  bool attached_target = false;
+  if (foreground_thread != 0 && foreground_thread != current_thread) {
+    attached_foreground =
+        AttachThreadInput(current_thread, foreground_thread, TRUE) != FALSE;
+  }
+  if (target_thread != 0 && target_thread != current_thread &&
+      target_thread != foreground_thread) {
+    attached_target =
+        AttachThreadInput(current_thread, target_thread, TRUE) != FALSE;
+  }
+
+  SetForegroundWindow(hwnd);
+  BringWindowToTop(hwnd);
+
+  if (attached_foreground) {
+    AttachThreadInput(current_thread, foreground_thread, FALSE);
+  }
+  if (attached_target) {
+    AttachThreadInput(current_thread, target_thread, FALSE);
+  }
+  return GetForegroundWindow() == hwnd;
+}
+
 bool FlutterWindow::PasteToPreviousWindow() {
   const std::wstring expected_process = last_external_process_name_;
+  HWND preferred = last_external_foreground_;
+  if (preferred != nullptr && !IsWindow(preferred)) {
+    preferred = nullptr;
+  }
+
   ShowWindow(GetHandle(), SW_HIDE);
 
+  // Wait for the system to activate a window on its own. Shell windows
+  // (taskbar/desktop) are ignored: they take focus when this window was
+  // shown via its taskbar button and will never be the paste target.
   HWND target = nullptr;
   for (int attempt = 0; attempt < 25; ++attempt) {
     Sleep(20);
-    target = GetForegroundWindow();
-    if (target != nullptr && target != GetHandle()) {
+    const HWND foreground = GetForegroundWindow();
+    if (foreground == nullptr || foreground == GetHandle()) {
+      continue;
+    }
+    if (!IsCapturableForegroundWindow(foreground)) {
+      continue;
+    }
+    if (!expected_process.empty() &&
+        GetWindowProcessName(foreground) != expected_process) {
       break;
     }
+    target = foreground;
+    break;
   }
 
-  if (target == nullptr || target == GetHandle()) {
-    if (last_external_foreground_ != nullptr &&
-        IsWindow(last_external_foreground_)) {
-      SetForegroundWindow(last_external_foreground_);
-      Sleep(80);
-      target = GetForegroundWindow();
+  // Focus did not return to the expected app (e.g. the window was shown
+  // via its taskbar button): force-activate the remembered target window.
+  if (target == nullptr && preferred != nullptr &&
+      ForceActivateWindow(preferred)) {
+    for (int attempt = 0; attempt < 10; ++attempt) {
+      Sleep(20);
+      if (GetForegroundWindow() == preferred) {
+        target = preferred;
+        break;
+      }
+    }
+    if (target == nullptr) {
+      const HWND foreground = GetForegroundWindow();
+      if (foreground != nullptr && foreground != GetHandle() &&
+          IsCapturableForegroundWindow(foreground) &&
+          (expected_process.empty() ||
+           GetWindowProcessName(foreground) == expected_process)) {
+        target = foreground;
+      }
     }
   }
 
-  if (target == nullptr || target == GetHandle()) {
+  if (target == nullptr) {
     return false;
   }
   if (!expected_process.empty() &&
