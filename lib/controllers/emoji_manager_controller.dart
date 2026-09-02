@@ -773,6 +773,48 @@ class EmojiManagerController extends ChangeNotifier {
     await _moveItem(itemPath, targetIndex: entry.items.length - 1);
   }
 
+  /// 当前视图是否可拖拽重排序 (具体分类视图且无搜索过滤)。
+  bool get canReorderCurrentView {
+    return _selectedCategory != null && !_isSpecialView && _searchQuery.isEmpty;
+  }
+
+  /// 拖拽重排序的内存态移动: 把 fromPath 的表情移到 toPath 当前位置。
+  /// 只更新内存并通知 UI, 持久化由 [commitCategoryOrder] 在松手时完成。
+  bool reorderCategoryItem(String category, String fromPath, String toPath) {
+    final items = [...?_itemsByCategory[category]];
+    final from = items.indexWhere((item) => item.path == fromPath);
+    final to = items.indexWhere((item) => item.path == toPath);
+    if (from < 0 || to < 0 || from == to) {
+      return false;
+    }
+    final moving = items.removeAt(from);
+    items.insert(to, moving);
+    _itemsByCategory[category] = items;
+    notifyListeners();
+    return true;
+  }
+
+  /// 拖拽结束: 把当前分类顺序持久化到顺序文件并切回手动排序。
+  Future<void> commitCategoryOrder(String category) async {
+    final currentRootPath = _rootPath;
+    final items = _itemsByCategory[category];
+    if (currentRootPath == null || items == null) {
+      return;
+    }
+    if (_sortOrder != SortOrder.byOrder) {
+      _sortOrder = SortOrder.byOrder;
+      await _settingsService.saveSortOrder(_sortOrder);
+    }
+    await _repository.saveOrderForCategory(
+      rootPath: currentRootPath,
+      category: category,
+      // 链接项不落顺序文件 (排序只作用于 home 分类原生项)。
+      items: items.where((item) => !item.isLink).toList(),
+    );
+    await _saveCache();
+    notifyListeners();
+  }
+
   /// 选择分类视图。
   void selectCategory(String category) {
     if (_selectedCategory == category) {

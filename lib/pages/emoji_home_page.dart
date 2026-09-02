@@ -36,6 +36,21 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
   /// 是否有内容正在拖入悬浮 (用于显示拖放遮罩)。
   bool _dragging = false;
 
+  // ---- 按压手势状态机: 按下直接拖动 = 重排序; 按住不动稍久 = 放大预览。----
+  /// 放大预览触发延时 (按住基本不动)。
+  static const _zoomActivationDelay = Duration(milliseconds: 200);
+  /// 判定"开始拖动"的位移阈值 (逻辑像素), 超过即进入拖拽并取消放大。
+  static const _dragStartSlop = 8.0;
+
+  Timer? _zoomActivationTimer;
+  bool _dragActive = false;
+  bool _zoomActive = false;
+  Offset? _pressStartPosition;
+  String? _dragPath;
+  EmojiItem? _zoomItem;
+  /// 本次按压激活过拖拽/放大模式, 松手后需吞掉随之而来的 tap。
+  bool _pressActivatedMode = false;
+
   @override
   void initState() {
     super.initState();
@@ -44,6 +59,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
 
   @override
   void dispose() {
+    _zoomActivationTimer?.cancel();
     _controller.dispose();
     _searchController.dispose();
     _categoryScrollController.dispose();
@@ -100,6 +116,12 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                   child: _HealReportBanner(
                     report: _controller.healReport!,
                     onDismiss: _controller.dismissHealReport,
+                  ),
+                ),
+              if (_zoomActive && _zoomItem != null)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: _buildZoomOverlay(_zoomItem!),
                   ),
                 ),
             ],
@@ -178,7 +200,10 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
               children: [
                 Positioned.fill(
                   child: Listener(
+                    behavior: HitTestBehavior.translucent,
                     onPointerSignal: _handlePointerSignal,
+                    onPointerUp: (_) => _finishPress(),
+                    onPointerCancel: (_) => _finishPress(),
                     child: _controller.visibleItems.isEmpty
                         ? _buildEmptyCategoryState()
                         : GridView.builder(
@@ -189,31 +214,11 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                               childAspectRatio: 1.0,
                             ),
                             itemCount: _controller.visibleItems.length,
-                            itemBuilder: (context, index) {
-                              final item = _controller.visibleItems[index];
-                              final card = Tooltip(
-                                message: item.name,
-                                excludeFromSemantics: true,
-                                child: ImageCard(
-                                  width: double.infinity,
-                                  height: double.infinity,
-                                  imageProvider: _imageProviderFor(item),
-                                  title: item.name,
-                                  showText: false,
-                                  showBottomOverlay: false,
-                                  trailingLabel: item.isMissing
-                                      ? '丢失'
-                                      : (item.isLink ? '链接' : null),
-                                  onTap: () => _handleEmojiTap(item),
-                                  onLongPress: () => _showPreview(item),
-                                  onSecondaryTapUp: (details) =>
-                                      _showItemMenu(item, details.globalPosition),
+                            itemBuilder: (context, index) =>
+                                _buildGridCard(
+                                  context,
+                                  _controller.visibleItems[index],
                                 ),
-                              );
-                              return item.isMissing
-                                  ? Opacity(opacity: 0.4, child: card)
-                                  : card;
-                            },
                           ),
                   ),
                 ),
@@ -223,6 +228,185 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
           ),
         ),
       ],
+    );
+  }
+
+  /// 网格卡片: 包裹 MouseRegion (放大时悬停切换大图) 与 Listener
+  /// (按下/移动事件驱动 拖拽重排 或 放大预览 状态机)。
+  Widget _buildGridCard(BuildContext context, EmojiItem item) {
+    final card = Tooltip(
+      message: item.name,
+      excludeFromSemantics: true,
+      child: MouseRegion(
+        cursor:
+            _dragActive ? SystemMouseCursors.move : SystemMouseCursors.click,
+        // 指针按下后 hit test 锁定在起始卡片, move 事件不会派发给其它卡片;
+        // 拖拽换位与放大切换都依赖 MouseTracker 的 onEnter (每次移动重新命中)。
+        onEnter: (_) => _handleItemHover(item),
+        child: Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: (event) => _handleItemPointerDown(item, event),
+          onPointerMove: (event) => _handleItemPointerMove(item, event.position),
+          child: ImageCard(
+            width: double.infinity,
+            height: double.infinity,
+            imageProvider: _imageProviderFor(item),
+            title: item.name,
+            showText: false,
+            showBottomOverlay: false,
+            selected: _dragActive && _dragPath == item.path,
+            trailingLabel:
+                item.isMissing ? '丢失' : (item.isLink ? '链接' : null),
+            onTap: () {
+              // 拖拽/放大模式后的松手不当作点击, 防止误复制。
+              if (_pressActivatedMode) {
+                _pressActivatedMode = false;
+                return;
+              }
+              _handleEmojiTap(item);
+            },
+            onSecondaryTapUp: (details) =>
+                _showItemMenu(item, details.globalPosition),
+          ),
+        ),
+      ),
+    );
+    return item.isMissing ? Opacity(opacity: 0.4, child: card) : card;
+  }
+
+  /// 按下: 记录起点并启动放大预览定时器。
+  /// 只有主键 (左键) 参与手势, 右键/中键走各自菜单逻辑。
+  void _handleItemPointerDown(EmojiItem item, PointerDownEvent event) {
+    if (event.buttons != kPrimaryButton) {
+      return;
+    }
+    _zoomActivationTimer?.cancel();
+    _pressStartPosition = event.position;
+    _dragActive = false;
+    _zoomActive = false;
+    _zoomItem = null;
+    _dragPath = null;
+    _pressActivatedMode = false;
+    _zoomActivationTimer = Timer(_zoomActivationDelay, () {
+      _zoomActivationTimer = null;
+      if (_pressStartPosition == null || _dragActive || !mounted) {
+        return;
+      }
+      setState(() {
+        _zoomActive = true;
+        _zoomItem = item;
+        _pressActivatedMode = true;
+      });
+    });
+  }
+
+  /// 指针进入某张卡片 (MouseTracker 重新命中后触发):
+  /// 放大模式 → 切换大图; 拖拽模式 → 与目标卡片实时换位。
+  void _handleItemHover(EmojiItem item) {
+    if (_zoomActive) {
+      if (_zoomItem?.path != item.path) {
+        setState(() => _zoomItem = item);
+      }
+      return;
+    }
+    if (_dragActive && _dragPath != null && item.path != _dragPath) {
+      final category = _controller.selectedCategory;
+      if (category != null) {
+        _controller.reorderCategoryItem(category, _dragPath!, item.path);
+      }
+    }
+  }
+
+  /// 移动 (仅起始卡片能收到, 因按下时 hit test 锁定):
+  /// 超过阈值 → 直接进入拖拽重排并取消放大定时器。
+  void _handleItemPointerMove(EmojiItem item, Offset position) {
+    if (_pressStartPosition == null || _zoomActive || _dragActive) {
+      return;
+    }
+    final moved = (position - _pressStartPosition!).distance;
+    if (moved <= _dragStartSlop) {
+      return;
+    }
+    _zoomActivationTimer?.cancel();
+    _zoomActivationTimer = null;
+    if (!_controller.canReorderCurrentView || item.isLink || item.isMissing) {
+      return;
+    }
+    setState(() {
+      _dragActive = true;
+      _dragPath = item.path;
+      _pressActivatedMode = true;
+    });
+  }
+
+  /// 松手/取消: 结束按压状态; 若在拖拽中则把当前顺序持久化。
+  void _finishPress() {
+    if (_pressStartPosition == null && !_dragActive && !_zoomActive) {
+      return;
+    }
+    final wasDragging = _dragActive;
+    _zoomActivationTimer?.cancel();
+    _zoomActivationTimer = null;
+    _pressStartPosition = null;
+    _dragPath = null;
+    if (mounted) {
+      setState(() {
+        _dragActive = false;
+        _zoomActive = false;
+        _zoomItem = null;
+      });
+    }
+    if (wasDragging) {
+      final category = _controller.selectedCategory;
+      if (category != null) {
+        unawaited(_controller.commitCategoryOrder(category));
+      }
+    }
+  }
+
+  /// 放大预览遮罩: 原始比例接近全窗口显示 + 底部名称胶囊;
+  /// IgnorePointer 保证鼠标仍可悬停到其它卡片切换大图。
+  Widget _buildZoomOverlay(EmojiItem item) {
+    return Container(
+      color: Colors.black.withValues(alpha: 0.6),
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        children: [
+          Expanded(
+            child: Center(
+              child: item.isMissing
+                  ? const Icon(
+                      Icons.image_not_supported_outlined,
+                      size: 120,
+                      color: Colors.white38,
+                    )
+                  : Image.file(
+                      File(item.path),
+                      fit: BoxFit.contain,
+                      filterQuality: FilterQuality.medium,
+                    ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.65),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              child: Text(
+                item.isLink
+                    ? '${item.name}  ·  链接自「${item.homeCategory ?? item.category}」'
+                    : item.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
