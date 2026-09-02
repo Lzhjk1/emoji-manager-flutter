@@ -17,6 +17,7 @@ import '../services/platform_emoji_clipboard_service.dart';
 import '../services/window_control_service.dart';
 import '../widgets/emoji_preview_dialog.dart';
 
+/// 主页面 (View 层)。
 class EmojiHomePage extends StatefulWidget {
   const EmojiHomePage({super.key});
 
@@ -24,10 +25,14 @@ class EmojiHomePage extends StatefulWidget {
   State<EmojiHomePage> createState() => _EmojiHomePageState();
 }
 
+/// 主页面状态: 通过 [AnimatedBuilder] 监听 Controller,
+/// 组合顶栏 (搜索/排序/置顶/设置)、分类栏与表情网格。
 class _EmojiHomePageState extends State<EmojiHomePage> {
   late final EmojiManagerController _controller;
   final TextEditingController _searchController = TextEditingController();
   final ScrollController _categoryScrollController = ScrollController();
+
+  /// 是否有内容正在拖入悬浮 (用于显示拖放遮罩)。
   bool _dragging = false;
 
   @override
@@ -86,6 +91,8 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     );
   }
 
+  /// 页面主体: 未选目录时显示欢迎页, 首次加载显示进度,
+  /// 否则显示 顶栏 + 分类栏 + 表情网格。
   Widget _buildBody(BuildContext context) {
     if (_controller.rootPath == null || _controller.rootPath!.isEmpty) {
       return _buildWelcomeState(context);
@@ -195,6 +202,8 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     );
   }
 
+  /// 拖放悬浮遮罩: 背景模糊 + 深色遮罩 + 胶囊提示文字,
+  /// 按当前视图是否可接收显示不同颜色与文案。
   Widget _buildDropOverlay(BuildContext context) {
     final accepted = _controller.canAcceptDroppedImages;
     final color = accepted ? Theme.of(context).colorScheme.primary : Colors.orange;
@@ -249,6 +258,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     );
   }
 
+  /// 处理拖放完成: 把拖入的文件/目录导入当前分类, 并用 SnackBar 反馈结果。
   Future<void> _handleImageDrop(DropDoneDetails details) async {
     if (mounted) {
       setState(() => _dragging = false);
@@ -294,6 +304,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     );
   }
 
+  /// 未选择表情库根目录时的欢迎引导页。
   Widget _buildWelcomeState(BuildContext context) {
     return Center(
       child: ConstrainedBox(
@@ -341,6 +352,8 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     );
   }
 
+  /// 顶栏: 统计信息 + 搜索框 + 操作按钮 (重扫/置顶/排序/设置);
+  /// 窗口较窄 (宽度 < 980) 时改为两行布局以节省横向空间。
   Widget _buildTopBar(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -427,6 +440,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     );
   }
 
+  /// 顶栏左侧的统计 chips (分类数、表情总数)。
   Widget _buildStatsWrap() {
     return Wrap(
       spacing: 8,
@@ -438,6 +452,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     );
   }
 
+  /// 搜索框: 匹配表情文件名或备注, 有内容时显示清空按钮。
   Widget _buildSearchField({double? width}) {
     return SizedBox(
       width: width,
@@ -463,6 +478,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     );
   }
 
+  /// 分类栏: 横向滚动的分类卡片列表, 前两个固定为"全部"与"最近使用"。
   Widget _buildCategoryBar(BuildContext context) {
     final entries = <_CategoryEntry>[
       _CategoryEntry(
@@ -528,6 +544,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     );
   }
 
+  /// 当前分类为空时显示的占位提示 (区分"无图片"与"无搜索结果")。
   Widget _buildEmptyCategoryState() {
     return Center(
       child: Text(
@@ -547,12 +564,14 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     await _controller.rescan();
   }
 
+  /// 热键主键候选列表: A-Z、0-9、F1-F12 的虚拟键码。
   static final List<int> _hotkeyKeyCodeItems = [
     ...List.generate(26, (index) => 0x41 + index), // A-Z
     ...List.generate(10, (index) => 0x30 + index), // 0-9
     ...List.generate(12, (index) => 0x70 + index), // F1-F12
   ];
 
+  /// 把虚拟键码转成可读文本 (字母/数字/F键, 其余显示十六进制)。
   static String _virtualKeyLabel(int keyCode) {
     if (keyCode >= 0x41 && keyCode <= 0x5A) {
       return String.fromCharCode(keyCode);
@@ -566,6 +585,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     return '0x${keyCode.toRadixString(16)}';
   }
 
+  /// 把修饰键掩码 + 主键拼成如 "Ctrl + Shift + V" 的可读文本。
   static String _hotkeyLabel(int modifiers, int keyCode) {
     final parts = <String>[];
     if ((modifiers & WindowControlService.hotkeyModifierControl) != 0) {
@@ -584,6 +604,8 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     return parts.join(' + ');
   }
 
+  /// 设置面板 (底部弹窗): 目录选择、窗口行为、自动粘贴进程列表、
+  /// 全局快捷键、扫描例外与缩略图大小调节。
   Future<void> _showSettingsSheet() async {
     final ignoreDirectoriesController = TextEditingController(
       text: _controller.ignoredDirectories.join(', '),
@@ -763,6 +785,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                                   modifiers = selected
                                       ? (modifiers | entry.value)
                                       : (modifiers & ~entry.value);
+                                  // 全部修饰键都被取消时强制保留 Ctrl, 保证热键有效。
                                   if ((modifiers & 0xF) == 0) {
                                     modifiers |=
                                         WindowControlService
@@ -889,6 +912,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     }
   }
 
+  /// Ctrl + 鼠标滚轮: 实时调节网格缩略图大小。
   void _handlePointerSignal(PointerSignalEvent event) {
     if (event is! PointerScrollEvent) {
       return;
@@ -907,6 +931,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     _controller.setGridThumbnailSize(nextValue);
   }
 
+  /// 鼠标滚轮横向滚动分类栏 (分类栏为横向 ListView)。
   void _handleCategoryPointerSignal(PointerSignalEvent event) {
     if (event is! PointerScrollEvent || !_categoryScrollController.hasClients) {
       return;
@@ -920,6 +945,10 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     _categoryScrollController.jumpTo(nextOffset);
   }
 
+  /// 点击表情:
+  /// 1. 若唤起前的前台应用在自动粘贴列表中, 以位图/文件复制并自动粘贴回该应用;
+  /// 2. 否则退化为把文件复制到剪贴板;
+  /// 两条路径均会记录使用次数。
   Future<void> _handleEmojiTap(EmojiItem item) async {
     if (Platform.isWindows && _controller.autoPasteProcesses.isNotEmpty) {
       final processName = await WindowControlService
@@ -959,6 +988,8 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     );
   }
 
+  /// 右键菜单: 复制到剪贴板 / 预览与备注 / 刷新缩略图 /
+  /// 在资源管理器中显示 (仅 Windows) / 删除。
   Future<void> _showItemMenu(EmojiItem item, Offset position) async {
     final overlay =
         Overlay.of(context).context.findRenderObject()! as RenderBox;
@@ -1027,6 +1058,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     }
   }
 
+  /// 删除图片 (带确认弹窗), 删除后用 SnackBar 反馈结果。
   Future<void> _handleDeleteItem(EmojiItem item) async {
     final messenger = ScaffoldMessenger.of(context);
     final confirmed = await showDialog<bool>(
@@ -1068,6 +1100,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     );
   }
 
+  /// 在资源管理器中定位显示图片文件 (仅 Windows)。
   Future<void> _revealInExplorer(EmojiItem item) async {
     final messenger = ScaffoldMessenger.of(context);
     if (!File(item.path).existsSync()) {
@@ -1095,10 +1128,10 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     );
   }
 
+  /// 强制重新生成单张图片的缩略图。
   Future<void> _refreshItemThumbnail(EmojiItem item) async {
-    // GIF previews load the source file directly and its mtime may not
-    // change; evict it. Thumbnail files get a fresh mtime on rebuild, so
-    // their FileImage cache key changes automatically.
+    // GIF 预览直接加载源文件, 其修改时间可能没变, 需主动逐出缓存;
+    // 缩略图文件重建后修改时间会更新, FileImage 缓存键随之变化, 无需处理。
     PaintingBinding.instance.imageCache.evict(FileImage(File(item.path)));
 
     final refreshed = await _controller.refreshThumbnail(item.path);
@@ -1117,6 +1150,8 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     );
   }
 
+  /// 网格卡片的图片 provider: 优先用缩略图 (按网格尺寸解码);
+  /// GIF 无缩略图, 直接加载源文件以显示动图。
   ImageProvider<Object>? _imageProviderFor(EmojiItem item) {
     final thumbnailPath = _thumbnailPathFor(item);
     if (thumbnailPath == null) {
@@ -1137,6 +1172,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     );
   }
 
+  /// 分类卡片的图片 provider: 使用分类封面缩略图 (96px 逻辑尺寸解码)。
   ImageProvider<Object>? _categoryImageProvider(EmojiItem? item) {
     if (item == null) {
       return null;
@@ -1157,6 +1193,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     );
   }
 
+  /// 取可用的缩略图路径 (文件必须存在, 否则视为无缩略图)。
   String? _thumbnailPathFor(EmojiItem? item) {
     if (item == null) {
       return null;
@@ -1168,6 +1205,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     return null;
   }
 
+  /// 切换分类: 清空图片缓存后通知 Controller (防止跨分类的缓存图片闪现)。
   void _handleCategorySelection(String category) {
     if (_controller.selectedCategory == category) {
       return;
@@ -1178,6 +1216,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     _controller.selectCategory(category);
   }
 
+  /// 打开表情预览弹窗, 注入备注保存与排序回调。
   Future<void> _showPreview(EmojiItem item) async {
     final currentIndex = _controller.indexOfItemInCategory(item.path) ?? 0;
     final totalCount = _controller.totalCountOfCategory(item.category);
@@ -1197,6 +1236,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
   }
 }
 
+/// 顶栏统计 chip (标签 + 数值)。
 class _StatChip extends StatelessWidget {
   const _StatChip({
     required this.label,
@@ -1241,6 +1281,7 @@ class _StatChip extends StatelessWidget {
   }
 }
 
+/// 分类栏卡片的数据描述 (分类标识、显示名、封面图、可选图标)。
 class _CategoryEntry {
   const _CategoryEntry({
     required this.category,
@@ -1255,6 +1296,7 @@ class _CategoryEntry {
   final IconData? iconData;
 }
 
+/// 单个分类卡片: 封面图 (Cover 裁切) + 分类名, 选中时高亮描边。
 class _CategoryCard extends StatelessWidget {
   const _CategoryCard({
     required this.category,

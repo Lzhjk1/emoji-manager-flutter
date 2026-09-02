@@ -11,9 +11,19 @@ import '../services/emoji_repository.dart';
 import '../services/emoji_settings_service.dart';
 import '../services/window_control_service.dart';
 
+/// 应用状态中枢 (Controller 层)。
+///
+/// 持有表情库数据、当前选中分类、搜索词、排序方式与各设置项,
+/// 调用 services 层完成扫描/导入/删除/排序等操作后通过 [notifyListeners]
+/// 通知 UI 重建。UI 层 (emoji_home_page) 只与该控制器交互。
 class EmojiManagerController extends ChangeNotifier {
+  /// "全部表情"虚拟视图 (聚合所有分类, 无对应磁盘目录)。
   static const String allCategoryView = '__all__';
+
+  /// "最近使用"虚拟视图 (按使用记录排序)。
   static const String recentCategoryView = '__recent__';
+
+  /// 最近使用记录条数上限。
   static const int _recentUsageLimit = 200;
 
   EmojiManagerController({
@@ -69,6 +79,7 @@ class EmojiManagerController extends ChangeNotifier {
   List<String> get categories => _itemsByCategory.keys.toList(growable: false);
   bool get hasData => _itemsByCategory.isNotEmpty;
 
+  /// 每个分类取第一张图, 作为分类卡片的封面缩略图。
   Map<String, EmojiItem> get categoryThumbnails {
     return <String, EmojiItem>{
       for (final entry in _itemsByCategory.entries)
@@ -76,6 +87,7 @@ class EmojiManagerController extends ChangeNotifier {
     };
   }
 
+  /// 表情总数 (所有分类求和)。
   int get totalEmojiCount {
     return _itemsByCategory.values.fold<int>(
       0,
@@ -92,11 +104,13 @@ class EmojiManagerController extends ChangeNotifier {
     return null;
   }
 
+  /// "最近使用"视图的封面缩略图 (最近一次使用的表情)。
   EmojiItem? get recentViewThumbnail {
     final recent = recentItems;
     return recent.isEmpty ? null : recent.first;
   }
 
+  /// 按最近使用记录的顺序, 从当前数据中捞出仍然存在的表情。
   List<EmojiItem> get recentItems {
     final index = <String, EmojiItem>{
       for (final items in _itemsByCategory.values)
@@ -108,11 +122,15 @@ class EmojiManagerController extends ChangeNotifier {
     ];
   }
 
+  /// 当前视图是否为虚拟视图 (全部/最近使用)。
   bool get _isSpecialView {
     return _selectedCategory == allCategoryView ||
         _selectedCategory == recentCategoryView;
   }
 
+  /// 当前视图应显示的表情列表:
+  /// 全部视图聚合所有分类, 最近使用视图按使用记录, 其余取对应分类;
+  /// 再按搜索词过滤 (匹配名称或备注)。
   List<EmojiItem> get visibleItems {
     final currentCategory = _selectedCategory;
     if (currentCategory == null) {
@@ -140,6 +158,8 @@ class EmojiManagerController extends ChangeNotifier {
     }).toList();
   }
 
+  /// 应用启动初始化: 恢复设置、应用窗口/热键配置,
+  /// 优先用缓存数据快速呈现, 再后台重新扫描刷新。
   Future<void> initialize() async {
     if (_initialized) {
       return;
@@ -168,6 +188,7 @@ class EmojiManagerController extends ChangeNotifier {
 
     final cached = await _cacheService.load(_rootPath!);
     if (cached != null) {
+      // 缓存命中: 先立即呈现缓存数据, 再异步重新扫描保证内容最新。
       _categoryMetadata = cached.categoryMetadata;
       _applyResult(
         await _repository.sortItemsByCategory(
@@ -189,6 +210,7 @@ class EmojiManagerController extends ChangeNotifier {
     );
   }
 
+  /// 通过系统对话框选择表情库根目录, 重置状态后扫描。
   Future<void> pickRootDirectory() async {
     final selectedPath = await FilePicker.platform.getDirectoryPath(
       dialogTitle: '选择表情包根目录',
@@ -223,6 +245,7 @@ class EmojiManagerController extends ChangeNotifier {
     );
   }
 
+  /// 重新扫描表情库, 更新数据并写回缓存; 扫描出错时记录错误信息。
   Future<void> rescan({
     bool showBusyIndicator = true,
     String? loadingMessage,
@@ -265,6 +288,7 @@ class EmojiManagerController extends ChangeNotifier {
     }
   }
 
+  /// 切换排序方式: 持久化后对现有数据重新排序。
   Future<void> setSortOrder(SortOrder sortOrder) async {
     if (_sortOrder == sortOrder) {
       return;
@@ -291,6 +315,7 @@ class EmojiManagerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 调整网格缩略图边长 (限制在 72~280 之间)。
   Future<void> setGridThumbnailSize(double size) async {
     final normalizedSize = size.clamp(72, 280).toDouble();
     if ((_gridThumbnailSize - normalizedSize).abs() < 0.001) {
@@ -324,6 +349,7 @@ class EmojiManagerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 从设置页文本解析忽略目录列表 (按换行/逗号/分号切分) 并触发重扫。
   Future<void> setIgnoredDirectoriesFromText(String value) async {
     final normalized = value
         .split(RegExp(r'[\n,;]'))
@@ -342,6 +368,7 @@ class EmojiManagerController extends ChangeNotifier {
     await rescan();
   }
 
+  /// 从设置页文本解析自动粘贴目标进程列表并持久化。
   Future<void> setAutoPasteProcessesFromText(String value) async {
     final normalized = value
         .split(RegExp(r'[\n,;]'))
@@ -360,6 +387,7 @@ class EmojiManagerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 判断给定进程名是否在自动粘贴目标列表中 (忽略大小写与 .exe 后缀)。
   bool matchesAutoPasteTarget(String processName) {
     if (processName.isEmpty || _autoPasteProcesses.isEmpty) {
       return false;
@@ -372,6 +400,7 @@ class EmojiManagerController extends ChangeNotifier {
         .any((entry) => normalizeProcessName(entry) == target);
   }
 
+  /// 进程名规范化: 去空白、转小写、去掉 .exe 后缀, 便于比较。
   static String normalizeProcessName(String name) {
     var value = name.trim().toLowerCase();
     if (value.endsWith('.exe')) {
@@ -380,6 +409,7 @@ class EmojiManagerController extends ChangeNotifier {
     return value;
   }
 
+  /// 启用/禁用全局热键并立即向原生层重新注册。
   Future<void> setHotkeyEnabled(bool enabled) async {
     if (_hotkeyEnabled == enabled) {
       return;
@@ -390,6 +420,7 @@ class EmojiManagerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 更新全局热键组合 (修饰键 + 主键) 并重新注册。
   Future<void> setHotkeyBinding({
     required int modifiers,
     required int keyCode,
@@ -405,6 +436,7 @@ class EmojiManagerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 把当前热键配置应用到原生层 (注册或注销)。
   Future<void> _applyHotkeySettings() {
     if (!WindowControlService.isSupported) {
       return Future.value();
@@ -416,6 +448,8 @@ class EmojiManagerController extends ChangeNotifier {
     );
   }
 
+  /// 查找表情在当前视图中的索引, 用于预览弹窗的左右翻页;
+  /// 找不到时返回 null。
   int? indexOfItemInCategory(String itemPath) {
     if (_selectedCategory == allCategoryView) {
       var offset = 0;
@@ -437,6 +471,7 @@ class EmojiManagerController extends ChangeNotifier {
     return entry?.index;
   }
 
+  /// 指定视图的表情数量 (含虚拟视图)。
   int totalCountOfCategory(String category) {
     if (category == allCategoryView) {
       return totalEmojiCount;
@@ -447,6 +482,7 @@ class EmojiManagerController extends ChangeNotifier {
     return _itemsByCategory[category]?.length ?? 0;
   }
 
+  /// 记录一次使用: 把表情移到最近使用列表头部并持久化 (超过上限裁剪)。
   Future<void> recordUsage(String itemPath) async {
     _recentUsage = [
       itemPath,
@@ -461,8 +497,8 @@ class EmojiManagerController extends ChangeNotifier {
     }
   }
 
-  /// Whether dropped images can be added to the currently selected view.
-  /// Virtual views (recent / all) have no target folder on disk.
+  /// 当前视图是否可接收拖入的图片。
+  /// 虚拟视图 (最近使用/全部) 没有对应的磁盘目录, 不能接收。
   bool get canAcceptDroppedImages {
     final category = _selectedCategory;
     return category != null &&
@@ -471,9 +507,9 @@ class EmojiManagerController extends ChangeNotifier {
         _rootPath!.isNotEmpty;
   }
 
-  /// Imports dropped files/folders into the currently selected category.
-  /// Returns the import outcome, or null when the current view cannot accept
-  /// drops. Callers should surface the result to the user.
+  /// 把拖入的文件/目录导入当前选中分类, 并把新导入的插入到列表头部。
+  /// 返回导入结果; 当前视图不可接收或 paths 为空时返回 null,
+  /// 由调用方提示用户。
   Future<ImportResult?> addImagesToCurrentCategory(List<String> paths) async {
     final category = _selectedCategory;
     final currentRootPath = _rootPath;
@@ -500,9 +536,8 @@ class EmojiManagerController extends ChangeNotifier {
     return result;
   }
 
-  /// Deletes an image file on disk (with its thumbnail and metadata entries)
-  /// and removes it from the in-memory state. Returns false when the item
-  /// cannot be found or the file could not be deleted.
+  /// 删除图片文件 (连同缩略图与元数据条目), 并从内存状态中移除;
+  /// 找不到条目或删除失败时返回 false。
   Future<bool> deleteItem(String itemPath) async {
     final entry = _findItemEntry(itemPath);
     final rootPath = _rootPath;
@@ -541,8 +576,7 @@ class EmojiManagerController extends ChangeNotifier {
     return true;
   }
 
-  /// Regenerates the cached thumbnail of a single image. Returns false when
-  /// the item cannot be found or the thumbnail could not be rebuilt.
+  /// 重新生成单张图片的缩略图并更新内存状态; 失败返回 false。
   Future<bool> refreshThumbnail(String itemPath) async {
     final entry = _findItemEntry(itemPath);
     final rootPath = _rootPath;
@@ -566,6 +600,7 @@ class EmojiManagerController extends ChangeNotifier {
     return true;
   }
 
+  /// 保存图片备注 (空串表示清除), 同步内存状态与缓存。
   Future<void> saveRemark(String itemPath, String remark) async {
     final entry = _findItemEntry(itemPath);
     if (entry == null) {
@@ -583,6 +618,7 @@ class EmojiManagerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 移动表情位置 (上移/下移/置顶/置底入口)。
   Future<void> moveItemUp(String itemPath) async {
     await _moveItem(itemPath, offset: -1);
   }
@@ -603,6 +639,7 @@ class EmojiManagerController extends ChangeNotifier {
     await _moveItem(itemPath, targetIndex: entry.items.length - 1);
   }
 
+  /// 选择分类视图。
   void selectCategory(String category) {
     if (_selectedCategory == category) {
       return;
@@ -611,6 +648,7 @@ class EmojiManagerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 更新搜索词 (自动去首尾空白)。
   void updateSearchQuery(String value) {
     if (_searchQuery == value.trim()) {
       return;
@@ -619,6 +657,7 @@ class EmojiManagerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 清空搜索词。
   void clearSearch() {
     if (_searchQuery.isEmpty) {
       return;
@@ -627,6 +666,7 @@ class EmojiManagerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 应用扫描/排序结果, 结束加载态, 必要时修正选中分类。
   void _applyResult(Map<String, List<EmojiItem>> result) {
     _itemsByCategory = result;
     final categories = result.keys.toList(growable: false);
@@ -639,6 +679,8 @@ class EmojiManagerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 移动表情到新位置, 把当前顺序写回顺序文件;
+  /// 手动排序会强制把排序方式切回"按顺序文件"。
   Future<void> _moveItem(
     String itemPath, {
     int? offset,
@@ -676,6 +718,7 @@ class EmojiManagerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 在所有分类中按路径查找表情, 返回其所在分类与索引。
   _ItemEntry? _findItemEntry(String itemPath) {
     for (final entry in _itemsByCategory.entries) {
       final index = entry.value.indexWhere((item) => item.path == itemPath);
@@ -690,6 +733,7 @@ class EmojiManagerController extends ChangeNotifier {
     return null;
   }
 
+  /// 把当前内存数据写回应用级缓存。
   Future<void> _saveCache() async {
     final currentRootPath = _rootPath;
     if (currentRootPath == null) {
@@ -704,6 +748,7 @@ class EmojiManagerController extends ChangeNotifier {
     );
   }
 
+  /// 把窗口设置 (关闭行为/置顶) 应用到原生层。
   Future<void> _applyWindowSettings() {
     return WindowControlService.applySettings(
       closeBehavior: _closeButtonBehavior,
@@ -712,6 +757,7 @@ class EmojiManagerController extends ChangeNotifier {
   }
 }
 
+/// 表情在 `_itemsByCategory` 中的定位信息 (分类名 + 列表 + 索引)。
 class _ItemEntry {
   const _ItemEntry({
     required this.category,

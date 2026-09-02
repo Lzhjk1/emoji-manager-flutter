@@ -9,6 +9,7 @@ import '../models/emoji_scan_result.dart';
 import '../models/sort_order.dart';
 import 'emoji_thumbnail_service.dart';
 
+/// 导入结果: 成功导入的表情列表与被跳过的数量 (非图片或读取失败)。
 class ImportResult {
   const ImportResult({
     required this.imported,
@@ -19,12 +20,22 @@ class ImportResult {
   final int skipped;
 }
 
+/// 表情库的磁盘数据访问层。
+///
+/// 目录约定: [rootPath] 为表情库根目录, 根目录下每个子目录是一个分类,
+/// 根目录直属的图片属于"未分类"。每个分类目录内可包含:
+/// - `emoji_image_order.json`: 手动排序文件
+/// - `emoji_remarks.json`: 图片备注表 (文件名 -> 备注)
+/// - `.emoji_manager/`: 缩略图缓存与索引 (由 [EmojiThumbnailService] 管理)
 class EmojiRepository {
   EmojiRepository({
     EmojiThumbnailService? thumbnailService,
   }) : _thumbnailService = thumbnailService ?? EmojiThumbnailService();
 
+  /// 根目录直属图片归属的虚拟分类名。
   static const uncategorized = '未分类';
+
+  /// 始终忽略的目录名 (同步工具目录等)。
   static const defaultIgnoredDirectories = <String>{'.sync'};
   static const _orderFileName = 'emoji_image_order.json';
   static const _remarksFileName = 'emoji_remarks.json';
@@ -39,6 +50,12 @@ class EmojiRepository {
 
   final EmojiThumbnailService _thumbnailService;
 
+  /// 扫描整个表情库, 返回分类 -> 表情列表 及分类元数据。
+  ///
+  /// 同时完成三件事:
+  /// 1. 递归收集每个分类下的图片并组装 [EmojiItem];
+  /// 2. 确保缩略图存在 (必要时在后台 isolate 生成);
+  /// 3. 以本次扫描到的源图集合清理缩略图索引中的过期条目。
   Future<EmojiScanResult> scanWithMetadata(
     String rootPath, {
     Set<String> ignoredDirectoryNames = const {},
@@ -127,6 +144,7 @@ class EmojiRepository {
     );
   }
 
+  /// 对所有分类统一应用 [sortOrder] 排序。
   Future<Map<String, List<EmojiItem>>> sortItemsByCategory(
     String rootPath,
     Map<String, List<EmojiItem>> itemsByCategory,
@@ -144,6 +162,11 @@ class EmojiRepository {
     return result;
   }
 
+  /// 对单个分类的表情列表排序。
+  ///
+  /// - byName: 忽略大小写按名称升序;
+  /// - byTime: 按修改时间倒序 (最新在前);
+  /// - byOrder: 读取分类的顺序文件, 未登记的图片排在末尾并按名称兜底。
   Future<List<EmojiItem>> sortCategoryItems({
     required String rootPath,
     required String category,
@@ -191,6 +214,8 @@ class EmojiRepository {
     }
   }
 
+  /// 读取分类的顺序文件 (`emoji_image_order.json`), 返回图片名列表。
+  /// 文件缺失或内容非法时返回空列表。
   Future<List<String>> readOrderForCategory(String rootPath, String category) async {
     final categoryDirectory = _resolveCategoryDirectory(rootPath, category);
     final file = File(p.join(categoryDirectory.path, _orderFileName));
@@ -215,6 +240,7 @@ class EmojiRepository {
     }
   }
 
+  /// 把当前列表顺序写回分类的顺序文件 (拖拽排序后调用)。
   Future<void> saveOrderForCategory({
     required String rootPath,
     required String category,
@@ -229,6 +255,7 @@ class EmojiRepository {
     await file.writeAsString(const JsonEncoder.withIndent('  ').convert(payload));
   }
 
+  /// 递归加载所有分类目录的备注, 返回 图片绝对路径 -> 备注。
   Future<Map<String, String>> loadAllRemarks(
     String rootPath, {
     Set<String> ignoredDirectoryNames = const {},
@@ -247,6 +274,8 @@ class EmojiRepository {
     return result;
   }
 
+  /// 保存/清空单张图片的备注 (写入图片所在目录的备注文件;
+  /// 备注为空白则移除条目, 表空时删除文件)。
   Future<void> saveImageRemark({
     required String imagePath,
     required String remark,
@@ -275,9 +304,8 @@ class EmojiRepository {
     );
   }
 
-  /// Deletes the image file together with its cached thumbnail and its
-  /// entries in `emoji_remarks.json` / `emoji_image_order.json`. Returns
-  /// false when the file no longer exists or could not be deleted.
+  /// 删除图片文件, 并同步清理其备注条目、顺序文件条目与缩略图缓存。
+  /// 文件不存在或删除失败时返回 false。
   Future<bool> deleteImage({
     required String rootPath,
     required String category,
@@ -288,7 +316,7 @@ class EmojiRepository {
       return false;
     }
 
-    // 1. Remove the remark entry from the folder-local remarks file.
+    // 1. 从所在目录的备注文件中移除备注条目。
     final folder = imageFile.parent;
     final remarksFile = File(p.join(folder.path, _remarksFileName));
     if (remarksFile.existsSync()) {
@@ -303,7 +331,7 @@ class EmojiRepository {
       }
     }
 
-    // 2. Remove the name from the category order file.
+    // 2. 从分类顺序文件中移除条目。
     final orderFile = File(
       p.join(_resolveCategoryDirectory(rootPath, category).path, _orderFileName),
     );
@@ -322,7 +350,7 @@ class EmojiRepository {
       }
     }
 
-    // 3. Delete the cached thumbnail and its index entry.
+    // 3. 删除缩略图缓存及其索引条目。
     final thumbnailIndex = await _thumbnailService.loadIndex(rootPath);
     await _thumbnailService.invalidate(
       rootPath: rootPath,
@@ -335,11 +363,12 @@ class EmojiRepository {
       activeSourcePaths: thumbnailIndex.keys.toSet(),
     );
 
-    // 4. Delete the image file itself.
+    // 4. 删除图片文件本身。
     await imageFile.delete();
     return true;
   }
 
+  /// 递归收集 [directory] 下 (含子目录) 的图片文件并组装为 [EmojiItem]。
   Future<void> _collectImagesRecursively(
     Directory directory,
     String category,
@@ -390,12 +419,13 @@ class EmojiRepository {
     }
   }
 
+  /// 按扩展名过滤图片文件 (仅用于扫描已有文件; 新导入一律走魔数检测)。
   bool _isImageFile(String filePath) {
     return _imageExtensions.contains(p.extension(filePath).toLowerCase());
   }
 
-  /// Imports dropped files/folders into the directory backing [category].
-  /// Folders are expanded recursively; non-image files are skipped.
+  /// 把拖入的文件/目录导入到 [category] 对应的目录。
+  /// 目录会递归展开; 非图片文件被跳过。
   Future<ImportResult> importDroppedPaths({
     required String rootPath,
     required String category,
@@ -428,12 +458,13 @@ class EmojiRepository {
     return ImportResult(imported: imported, skipped: skipped);
   }
 
+  /// 递归收集目录下的图片路径, 跳过隐藏目录 (如 .sync / 缓存目录)。
   List<String> _collectImagePathsInDirectory(Directory directory) {
     final result = <String>[];
     for (final child in directory.listSync()) {
       final name = p.basename(child.path);
       if (child is Directory) {
-        // Skip hidden folders such as .sync / cache directories.
+        // 跳过隐藏目录 (.sync / 缓存目录等)。
         if (name.startsWith('.')) {
           continue;
         }
@@ -445,13 +476,12 @@ class EmojiRepository {
     return result;
   }
 
-  /// Copies a dropped image file into the directory backing [category] and
-  /// returns the resulting [EmojiItem]. The real format is sniffed from the
-  /// file header because drag sources (e.g. QQ) often hand out temp files
-  /// whose extension does not match the content. When the source file already
-  /// lives in the target directory it is reused in place instead of being
-  /// copied. Returns null when the source is missing or is not a supported
-  /// image.
+  /// 把一张拖入的图片复制进 [category] 目录并返回生成的 [EmojiItem]。
+  ///
+  /// 真实格式从文件头嗅探得出, 因为拖拽来源 (如 QQ) 给出的临时文件
+  /// 扩展名经常与内容不符。若源文件本就在目标目录中, 则原地复用、
+  /// 保留原文件名 (目录扫描依赖扩展名, 需保持一致)。
+  /// 源文件缺失或不是受支持的图片时返回 null。
   Future<EmojiItem?> _importImageToCategory({
     required String rootPath,
     required String category,
@@ -472,8 +502,7 @@ class EmojiRepository {
     String targetPath;
     String resultExtension;
     if (_isInsideDirectory(sourcePath, categoryDirectory.path)) {
-      // Reused in place: keep the on-disk name so it stays consistent with the
-      // directory scanner (which keys off the file extension).
+      // 原地复用: 保留磁盘上的原文件名, 与目录扫描器的扩展名约定保持一致。
       targetPath = sourceFile.path;
       resultExtension = p.extension(sourceFile.path).toLowerCase();
     } else {
@@ -519,6 +548,7 @@ class EmojiRepository {
     );
   }
 
+  /// 判断 [filePath] 是否直接位于 [directoryPath] 下 (不含子目录)。
   bool _isInsideDirectory(String filePath, String directoryPath) {
     return p.equals(
       p.dirname(p.canonicalize(filePath)),
@@ -526,10 +556,9 @@ class EmojiRepository {
     );
   }
 
-  /// Sniffs the real image format from the file header. Returns the canonical
-  /// extension (e.g. `.gif`) or null when the content is not a supported
-  /// image. Drag sources such as QQ hand out temp files whose extension lies
-  /// about the actual bytes, so the name alone cannot be trusted.
+  /// 从文件头魔数嗅探真实图片格式, 返回标准扩展名 (如 `.gif`);
+  /// 内容不是受支持的图片时返回 null。
+  /// QQ 等拖拽来源给出的临时文件扩展名不可信, 必须以字节内容为准。
   Future<String?> _detectImageFormat(File file) async {
     final RandomAccessFile raf;
     try {
@@ -543,15 +572,18 @@ class EmojiRepository {
       if (bytesRead < 12) {
         return null;
       }
+      // PNG: 89 50 4E 47
       if (header[0] == 0x89 &&
           header[1] == 0x50 &&
           header[2] == 0x4E &&
           header[3] == 0x47) {
         return '.png';
       }
+      // JPEG: FF D8 FF
       if (header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF) {
         return '.jpg';
       }
+      // GIF87a / GIF89a: GIF8[79]a
       if (header[0] == 0x47 &&
           header[1] == 0x49 &&
           header[2] == 0x46 &&
@@ -560,10 +592,11 @@ class EmojiRepository {
           header[5] == 0x61) {
         return '.gif';
       }
+      // BMP: 42 4D ("BM")
       if (header[0] == 0x42 && header[1] == 0x4D) {
         return '.bmp';
       }
-      // RIFF....WEBP
+      // WebP: "RIFF"...."WEBP"
       if (header[0] == 0x52 &&
           header[1] == 0x49 &&
           header[2] == 0x46 &&
@@ -574,16 +607,15 @@ class EmojiRepository {
           header[11] == 0x50) {
         return '.webp';
       }
-      // ISO-BMFF variant: ....ftypimage/heic etc. — not supported, reject.
+      // ISO-BMFF 系 (ftyp/heic 等) 不支持, 拒绝导入。
       return null;
     } finally {
       await raf.close();
     }
   }
 
-  /// Picks a non-colliding destination path, appending ` (1)`, ` (2)`, ...
-  /// before the extension when the name is already taken. The extension comes
-  /// from content detection rather than the (possibly wrong) source name.
+  /// 选取一个不冲突的目标路径, 重名时在扩展名前追加 ` (1)`、` (2)` ...
+  /// 扩展名来自内容嗅探, 而非 (可能错误的) 源文件名。
   String _reserveTargetPath(
     String directoryPath,
     File sourceFile,
@@ -599,9 +631,8 @@ class EmojiRepository {
     return candidate;
   }
 
-  /// Force-regenerates the thumbnail for a single image and returns the
-  /// updated [EmojiItem]. Returns null when the file is gone or the image
-  /// cannot be decoded.
+  /// 强制重新生成单张图片的缩略图并返回更新后的 [EmojiItem];
+  /// 文件已不存在或解码失败时返回 null (右键菜单"刷新缩略图"用)。
   Future<EmojiItem?> refreshThumbnail(String rootPath, EmojiItem item) async {
     final file = File(item.path);
     if (!file.existsSync()) {
@@ -627,7 +658,7 @@ class EmojiRepository {
     await _thumbnailService.saveIndex(
       rootPath: rootPath,
       index: thumbnailIndex,
-      // Keep every known entry; this is a single-file refresh.
+      // 单文件刷新, 保留索引中所有已有条目。
       activeSourcePaths: {...thumbnailIndex.keys, relativeSourcePath},
     );
 
@@ -637,6 +668,7 @@ class EmojiRepository {
     );
   }
 
+  /// 递归汇总目录及其子目录中的备注表, 把相对文件名展开为绝对路径。
   Future<void> _loadFolderRemarksRecursive(
     Directory directory,
     Map<String, String> collector,
@@ -673,6 +705,7 @@ class EmojiRepository {
     }
   }
 
+  /// 读取单个目录的备注文件, 返回 文件名 -> 备注; 非法内容按空表处理。
   Future<Map<String, String>> _loadRemarksForFolder(Directory directory) async {
     final file = File(p.join(directory.path, _remarksFileName));
     if (!file.existsSync()) {
@@ -692,12 +725,14 @@ class EmojiRepository {
     }
   }
 
+  /// 解析分类对应的磁盘目录: "未分类" 即根目录, 其余为根目录下同名子目录。
   Directory _resolveCategoryDirectory(String rootPath, String category) {
     return category == uncategorized
         ? Directory(rootPath)
         : Directory(p.join(rootPath, category));
   }
 
+  /// 把一个文件组装为 [EmojiItem], 途中确保缩略图存在并登记活跃路径。
   Future<EmojiItem> _toEmojiItem(
     File file,
     String category, {
@@ -735,6 +770,7 @@ class EmojiRepository {
     );
   }
 
+  /// 合并默认忽略目录、缩略图缓存目录与用户配置的忽略目录。
   Set<String> _buildIgnoredDirectories(Set<String> ignoredDirectoryNames) {
     return <String>{
       ...defaultIgnoredDirectories,

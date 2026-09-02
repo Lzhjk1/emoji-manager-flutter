@@ -5,6 +5,8 @@
 #include "flutter_window.h"
 #include "utils.h"
 
+// Windows 应用入口: 初始化 COM 与控制台, 创建主窗口 (FlutterWindow)
+// 并进入标准 Win32 消息循环。窗口的具体行为见 flutter_window.h/.cpp。
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {
   // Attach to console when present (e.g., 'flutter run') or create a

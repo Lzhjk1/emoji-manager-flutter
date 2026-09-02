@@ -3,6 +3,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/close_button_behavior.dart';
 import '../models/sort_order.dart';
 
+/// 用户设置的持久化层, 基于 SharedPreferences 封装各设置项的读写。
+///
+/// 覆盖: 表情库根路径、排序方式、网格缩略图尺寸、关闭按钮行为、
+/// 窗口置顶、忽略目录、最近使用记录 (上限 200 条, 由调用方裁剪)、
+/// 自动粘贴目标进程列表与全局热键配置。
 class EmojiSettingsService {
   static const _rootPathKey = 'emoji_root_path';
   static const _sortOrderKey = 'emoji_sort_order';
@@ -88,6 +93,7 @@ class EmojiSettingsService {
     await prefs.setStringList(_recentUsageKey, paths);
   }
 
+  /// 自动粘贴目标进程列表, 默认只有 QQ.exe。
   Future<List<String>> loadAutoPasteProcesses() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getStringList(_autoPasteProcessesKey) ?? const ['QQ.exe'];
@@ -108,6 +114,7 @@ class EmojiSettingsService {
     await prefs.setBool(_hotkeyEnabledKey, value);
   }
 
+  /// 热键修饰键位掩码, 默认 Ctrl + Shift (0x2 | 0x4)。
   Future<int> loadHotkeyModifiers() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getInt(_hotkeyModifiersKey) ?? 0x6; // Ctrl + Shift
@@ -118,6 +125,7 @@ class EmojiSettingsService {
     await prefs.setInt(_hotkeyModifiersKey, modifiers);
   }
 
+  /// 热键主键的虚拟键码, 默认 'V' (0x56)。
   Future<int> loadHotkeyKeyCode() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getInt(_hotkeyKeyCodeKey) ?? 0x56; // 'V'

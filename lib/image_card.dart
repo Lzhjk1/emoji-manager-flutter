@@ -1,5 +1,10 @@
 import 'package:flutter/material.dart';
 
+/// 通用卡片组件: 同时用于分类卡片与表情网格卡片。
+///
+/// 底层渐变背景 + 图片 (Contain 适配) + 底部文字遮罩;
+/// 支持选中描边、右上角徽标 ([trailingLabel])、
+/// 单击/长按/右键 ([onSecondaryTapUp]) 交互。
 class ImageCard extends StatelessWidget {
   const ImageCard({
     super.key,
@@ -86,6 +91,7 @@ class ImageCard extends StatelessWidget {
                   ),
                 ),
                 if (showBottomOverlay)
+                  // 底部渐变遮罩, 保证文字在浅色图片上仍可读。
                   Positioned(
                     left: 0,
                     right: 0,
@@ -171,6 +177,7 @@ class ImageCard extends StatelessWidget {
   }
 }
 
+/// 图片缺失或加载失败时显示的占位图标。
 class _CardPlaceholder extends StatelessWidget {
   const _CardPlaceholder();
 

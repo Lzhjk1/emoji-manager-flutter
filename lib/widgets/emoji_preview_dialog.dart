@@ -7,6 +7,11 @@ import 'package:share_plus/share_plus.dart';
 
 import '../models/emoji_item.dart';
 
+/// 表情预览与备注弹窗。
+///
+/// 展示大图 (按弹窗可用空间解码, 避免全尺寸原图解码)、
+/// 元信息 chips、备注编辑与排序按钮 (置顶/上移/下移/置底)。
+/// 排序动作完成后会关闭弹窗并刷新外层列表。
 class EmojiPreviewDialog extends StatefulWidget {
   const EmojiPreviewDialog({
     super.key,
@@ -21,8 +26,12 @@ class EmojiPreviewDialog extends StatefulWidget {
   });
 
   final EmojiItem item;
+
+  /// 在当前列表中的位置 (用于显示顺序与禁用越界按钮)。
   final int currentIndex;
   final int totalCount;
+
+  /// 回调由页面层注入, 委托给 Controller 完成实际操作。
   final Future<void> Function(String remark) onSaveRemark;
   final Future<void> Function() onMoveUp;
   final Future<void> Function() onMoveDown;
@@ -36,8 +45,12 @@ class EmojiPreviewDialog extends StatefulWidget {
 
 class _EmojiPreviewDialogState extends State<EmojiPreviewDialog> {
   late final TextEditingController _remarkController;
+
+  /// 防止备注保存/排序操作的重复提交。
   bool _savingRemark = false;
   bool _reordering = false;
+
+  /// 当前预览图 provider, 弹窗关闭时主动从图片缓存中逐出。
   ImageProvider<Object>? _previewImageProvider;
 
   @override
@@ -200,6 +213,8 @@ class _EmojiPreviewDialogState extends State<EmojiPreviewDialog> {
               Expanded(
                 child: LayoutBuilder(
                   builder: (context, constraints) {
+                    // 按弹窗实际显示尺寸 (乘 devicePixelRatio) 限制解码分辨率,
+                    // 而不是按原图全尺寸解码, 控制内存占用。
                     final dpr = MediaQuery.devicePixelRatioOf(context);
                     final targetWidth =
                         (constraints.maxWidth * dpr).round().clamp(256, 4096);
@@ -259,6 +274,7 @@ class _EmojiPreviewDialogState extends State<EmojiPreviewDialog> {
     );
   }
 
+  /// 复制文件绝对路径到剪贴板。
   Future<void> _copyPath(BuildContext context) async {
     await Clipboard.setData(ClipboardData(text: widget.item.path));
     if (!context.mounted) {
@@ -269,6 +285,7 @@ class _EmojiPreviewDialogState extends State<EmojiPreviewDialog> {
     );
   }
 
+  /// 调起系统分享面板分享图片文件。
   Future<void> _shareFile(BuildContext context) async {
     await SharePlus.instance.share(
       ShareParams(
@@ -304,6 +321,7 @@ class _EmojiPreviewDialogState extends State<EmojiPreviewDialog> {
 
   Future<void> _moveToEnd() => _runReorderAction(widget.onMoveToEnd);
 
+  /// 执行排序动作后关闭弹窗 (列表随后会刷新)。
   Future<void> _runReorderAction(Future<void> Function() action) async {
     setState(() {
       _reordering = true;
@@ -315,6 +333,7 @@ class _EmojiPreviewDialogState extends State<EmojiPreviewDialog> {
     Navigator.of(context).pop();
   }
 
+  /// 把字节数格式化为人类可读的 B/KB/MB/GB。
   String _formatFileSize(int bytes) {
     if (bytes <= 0) {
       return '未知';
@@ -331,6 +350,7 @@ class _EmojiPreviewDialogState extends State<EmojiPreviewDialog> {
   }
 }
 
+/// 元信息 chip (标签 + 值)。
 class _InfoChip extends StatelessWidget {
   const _InfoChip({
     required this.label,

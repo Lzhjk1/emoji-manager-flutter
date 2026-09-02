@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 
 import 'pages/emoji_home_page.dart';
 
+/// 应用根 Widget, 负责配置全局主题 (Material 3 深色方案 + 微软雅黑字体)。
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
+    // 基础表面色 (窗口底色)、面板色 (卡片/输入框) 与强调色。
     const baseSurface = Color(0xFF111315);
     const panelSurface = Color(0xFF1A1D21);
     const accentColor = Color(0xFF90CAF9);

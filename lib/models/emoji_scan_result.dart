@@ -1,5 +1,6 @@
 import 'emoji_item.dart';
 
+/// 分类的元数据: 分类名、对应磁盘目录路径及修改时间。
 class CategoryMetadata {
   const CategoryMetadata({
     required this.name,
@@ -28,15 +29,23 @@ class CategoryMetadata {
   }
 }
 
+/// 一次表情库扫描的结果: 各分类下的表情列表 + 分类元数据。
+///
+/// 扫描在后台 isolate 中完成, 结果经 JSON 序列化传回主 isolate 并可持久化缓存,
+/// 下次启动若目录未变化可直接复用, 加快启动速度。
 class EmojiScanResult {
   EmojiScanResult({
     required this.itemsByCategory,
     required this.categoryMetadata,
   });
 
+  /// 分类名 -> 该分类下的表情列表。
   final Map<String, List<EmojiItem>> itemsByCategory;
+
+  /// 分类名 -> 分类元数据。
   final Map<String, CategoryMetadata> categoryMetadata;
 
+  /// 构造空结果 (表情库为空或扫描失败时使用)。
   factory EmojiScanResult.empty() {
     return EmojiScanResult(
       itemsByCategory: {},

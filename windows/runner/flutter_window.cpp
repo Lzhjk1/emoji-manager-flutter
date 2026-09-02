@@ -16,25 +16,32 @@
 
 namespace {
 
+// MethodChannel 名称, 与 Dart 层 PlatformEmojiClipboardService /
+// WindowControlService 保持一致。
 constexpr char kClipboardChannelName[] = "emoji_manager/platform_clipboard";
 constexpr char kWindowChannelName[] = "emoji_manager/window_control";
-constexpr DWORD kDropEffectCopy = 1;
+constexpr DWORD kDropEffectCopy = 1;  // "Preferred DropEffect": 复制语义
 constexpr wchar_t kPreferredDropEffectFormat[] = L"Preferred DropEffect";
 constexpr UINT kTrayIconId = 1001;
+// 托盘图标回调消息 (WM_APP 段, 避免与系统消息冲突)。
 constexpr UINT kTrayCallbackMessage = WM_APP + 1;
 constexpr UINT kTrayMenuShowId = 40001;
 constexpr UINT kTrayMenuExitId = 40002;
+// 前台应用跟踪定时器: 每 250ms 采样一次前台窗口。
 constexpr UINT_PTR kForegroundTimerId = 2002;
 constexpr UINT kForegroundTimerIntervalMs = 250;
 constexpr int kHotkeyId = 2001;
 constexpr UINT kHotkeyModifierMask = MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_WIN;
 
+// 与 DROPFILES 结构等价的内部定义 (避免直接依赖 shellapi 布局差异)。
 typedef struct _TRAE_DROPFILES {
   DWORD pFiles;
   POINT pt;
   BOOL fNC;
   BOOL fWide;
 } TRAE_DROPFILES;
+
+// ---- MethodChannel 参数解码辅助 ----
 
 std::optional<std::string> GetStringValue(
     const flutter::EncodableMap& arguments,
@@ -113,6 +120,8 @@ std::string WideToUtf8(const std::wstring& input) {
   return output;
 }
 
+// 用 SendInput 模拟一次 Ctrl+V 按键序列 (按下/抬起)。
+// 注意: 若目标应用以管理员运行而本程序没有, SendInput 会被 UIPI 拦截。
 void SendCtrlV() {
   INPUT inputs[4] = {};
   inputs[0].type = INPUT_KEYBOARD;
@@ -146,6 +155,7 @@ std::wstring Utf8ToWide(const std::string& input) {
   return output;
 }
 
+// 构造 CF_HDROP 剪贴板数据: 单个文件路径, 以双 NUL 结尾。
 HGLOBAL CreateClipboardDropfilesHandle(const std::wstring& file_path) {
   const size_t bytes =
       sizeof(TRAE_DROPFILES) + ((file_path.size() + 2) * sizeof(wchar_t));
@@ -174,6 +184,7 @@ HGLOBAL CreateClipboardDropfilesHandle(const std::wstring& file_path) {
   return handle;
 }
 
+// 构造 "Preferred DropEffect" 附加数据 (标记为复制而非移动)。
 HGLOBAL CreatePreferredDropEffectHandle() {
   HGLOBAL handle = GlobalAlloc(GMEM_MOVEABLE, sizeof(DWORD));
   if (handle == nullptr) {
@@ -191,6 +202,7 @@ HGLOBAL CreatePreferredDropEffectHandle() {
   return handle;
 }
 
+// 把文件以 CF_HDROP 写入剪贴板 (供聊天软件直接粘贴文件)。
 bool CopyFilePathToClipboard(HWND owner, const std::string& file_path_utf8) {
   const std::wstring file_path = Utf8ToWide(file_path_utf8);
   if (file_path.empty()) {
@@ -262,10 +274,12 @@ bool FlutterWindow::OnCreate() {
   }
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
+  // 创建托盘图标, 并启动前台应用跟踪定时器。
   EnsureTrayIcon();
   SetTimer(GetHandle(), kForegroundTimerId, kForegroundTimerIntervalMs,
            nullptr);
 
+  // ---- 剪贴板通道: 复制文件/图片、资源管理器定位 ----
   clipboard_channel_ =
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
           flutter_controller_->engine()->messenger(), kClipboardChannelName,
@@ -339,6 +353,9 @@ bool FlutterWindow::OnCreate() {
         }
 
         if (call.method_name() == "revealInExplorer") {
+          // 用 shell API (SHParseDisplayName + SHOpenFolderAndSelectItems)
+          // 打开资源管理器并选中文件; 相比 explorer /select 命令行
+          // 对含逗号/空格的路径解析可靠。
           const auto* arguments =
               std::get_if<flutter::EncodableMap>(call.arguments());
           if (arguments == nullptr) {
@@ -373,6 +390,7 @@ bool FlutterWindow::OnCreate() {
 
         result->NotImplemented();
       });
+  // ---- 窗口控制通道: 窗口设置、前台应用查询、热键 ----
   window_channel_ =
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
           flutter_controller_->engine()->messenger(), kWindowChannelName,
@@ -442,6 +460,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  // 释放定时器、热键与托盘图标, 再销毁 Flutter 引擎。
   KillTimer(GetHandle(), kForegroundTimerId);
   if (hotkey_registered_ && GetHandle() != nullptr) {
     UnregisterHotKey(GetHandle(), kHotkeyId);
@@ -461,6 +480,7 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  // "关闭到托盘"模式: 拦截 WM_CLOSE, 隐藏窗口而不是退出。
   if (message == WM_CLOSE && close_to_tray_ && !force_close_) {
     MinimizeToTray();
     return 0;
@@ -478,6 +498,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
 
   switch (message) {
     case WM_COMMAND:
+      // 托盘右键菜单项。
       switch (LOWORD(wparam)) {
         case kTrayMenuShowId:
           RestoreFromTray();
@@ -489,6 +510,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       break;
 
     case WM_TIMER:
+      // 前台应用跟踪: 每 250ms 采样一次。
       if (wparam == kForegroundTimerId) {
         UpdateForegroundCapture();
         return 0;
@@ -496,6 +518,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       break;
 
     case WM_HOTKEY:
+      // 全局热键触发: 切换窗口显示/隐藏。
       if (wparam == kHotkeyId) {
         ToggleWindowVisibility();
         return 0;
@@ -503,6 +526,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       break;
 
     case kTrayCallbackMessage:
+      // 托盘图标交互: 左键/双击切换显示, 右键弹出菜单。
       switch (LOWORD(lparam)) {
         case WM_LBUTTONUP:
         case WM_LBUTTONDBLCLK:
@@ -636,6 +660,8 @@ void FlutterWindow::ExitApplication() {
 }
 
 void FlutterWindow::UpdateForegroundCapture() {
+  // 记录最近的外部前台窗口及其进程名。
+  // 跳过: 本窗口自身、以及与上次相同的窗口 (避免重复查询)。
   const HWND foreground = GetForegroundWindow();
   if (foreground == nullptr || foreground == GetHandle()) {
     return;
@@ -651,6 +677,8 @@ void FlutterWindow::UpdateForegroundCapture() {
   last_external_process_name_ = GetWindowProcessName(foreground);
 }
 
+// 任务栏 (Shell_TrayWnd / Shell_SecondaryTrayWnd) 与桌面 (Progman / WorkerW)
+// 不作为粘贴目标 —— 通过任务栏按钮唤起窗口时焦点会短暂落到 shell 上。
 bool FlutterWindow::IsCapturableForegroundWindow(HWND hwnd) {
   wchar_t class_name[64] = {};
   if (GetClassNameW(hwnd, class_name, 64) == 0) {
@@ -662,6 +690,8 @@ bool FlutterWindow::IsCapturableForegroundWindow(HWND hwnd) {
          class_name_string != L"Progman" && class_name_string != L"WorkerW";
 }
 
+// 取窗口所属进程的可执行文件名 (小写, 含 .exe 后缀)。
+// 用 PROCESS_QUERY_LIMITED_INFORMATION, 对更高权限的进程也能查询。
 std::wstring FlutterWindow::GetWindowProcessName(HWND hwnd) {
   DWORD process_id = 0;
   GetWindowThreadProcessId(hwnd, &process_id);
@@ -691,6 +721,8 @@ std::wstring FlutterWindow::GetWindowProcessName(HWND hwnd) {
   return name;
 }
 
+// 注册/注销全局热键。modifiers 必须包含至少一个修饰键,
+// key_code 限定在 0x08~0xFE; 注册失败 (如热键被其他软件占用) 返回 false。
 bool FlutterWindow::SetHotkey(bool enabled, UINT modifiers, UINT key_code) {
   if ((modifiers & kHotkeyModifierMask) == 0 || key_code < 0x08 ||
       key_code > 0xFE) {
@@ -715,6 +747,9 @@ bool FlutterWindow::SetHotkey(bool enabled, UINT modifiers, UINT key_code) {
   return hotkey_registered_;
 }
 
+// 把 RGBA 像素数据封装为 CF_DIB (32bpp, 自底向上, BGRA) 写入剪贴板。
+// 使用 CF_DIB 而非 PNG, 因为 QQ 等聊天软件粘贴截图时读取的就是该格式,
+// 文件体积也更小; paste 为 true 时随后向之前的前台窗口发送 Ctrl+V。
 bool FlutterWindow::CopyImageToClipboard(int width, int height,
                                          const std::vector<uint8_t>& rgba,
                                          bool paste, bool* pasted) {
@@ -743,12 +778,13 @@ bool FlutterWindow::CopyImageToClipboard(int width, int height,
   ZeroMemory(header, sizeof(BITMAPINFOHEADER));
   header->biSize = sizeof(BITMAPINFOHEADER);
   header->biWidth = width;
-  header->biHeight = height;  // Positive: bottom-up rows.
+  header->biHeight = height;  // Positive: bottom-up rows. 正值 = 行序自底向上。
   header->biPlanes = 1;
   header->biBitCount = 32;
   header->biCompression = BI_RGB;
   header->biSizeImage = static_cast<DWORD>(pixel_bytes);
 
+  // DIB 要求自底向上 + BGRA, 因此逐行倒序并把 RGBA 转成 BGRA。
   BYTE* pixels = memory + sizeof(BITMAPINFOHEADER);
   for (int y = 0; y < height; ++y) {
     const BYTE* source =
@@ -784,6 +820,9 @@ bool FlutterWindow::CopyImageToClipboard(int width, int height,
   return true;
 }
 
+// 强制把 hwnd 激活为前台窗口。
+// 附加线程输入队列绕过前台锁定限制:
+// 当焦点在 shell (任务栏) 上时, 直接调用 SetForegroundWindow 会失败。
 bool ForceActivateWindow(HWND hwnd) {
   if (hwnd == nullptr || !IsWindow(hwnd)) {
     return false;
@@ -823,6 +862,12 @@ bool ForceActivateWindow(HWND hwnd) {
   return GetForegroundWindow() == hwnd;
 }
 
+// 自动粘贴核心流程:
+// 1. 隐藏本窗口, 让系统自然把焦点交还给上一个应用;
+// 2. 轮询等待前台窗口出现, 且进程名与记录的目标一致 (防止粘错窗口);
+// 3. 若焦点迟迟不回来 (例如从任务栏唤起), 用 ForceActivateWindow 拉起记住的目标窗口;
+// 4. 确认目标后发送 Ctrl+V。
+// 找不到匹配目标时返回 false, 不发送任何按键。
 bool FlutterWindow::PasteToPreviousWindow() {
   const std::wstring expected_process = last_external_process_name_;
   HWND preferred = last_external_foreground_;
