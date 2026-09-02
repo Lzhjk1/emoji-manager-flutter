@@ -11,6 +11,7 @@ import '../controllers/emoji_manager_controller.dart';
 import '../image_card.dart';
 import '../models/close_button_behavior.dart';
 import '../models/emoji_item.dart';
+import '../models/emoji_scan_result.dart';
 import '../models/sort_order.dart';
 import '../services/emoji_thumbnail_service.dart';
 import '../services/platform_emoji_clipboard_service.dart';
@@ -55,35 +56,52 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
       animation: _controller,
       builder: (context, _) {
         return Scaffold(
-          body: Column(
+          body: Stack(
             children: [
-              if (_controller.loading && _controller.hasData)
-                Column(
-                  children: [
-                    const LinearProgressIndicator(minHeight: 2),
-                    if (_controller.loadingMessage != null)
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 8,
-                        ),
-                        color: const Color(0xFF151A1F),
-                        child: Text(
-                          _controller.loadingMessage!,
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                color: Colors.white70,
-                              ),
-                        ),
-                      ),
-                  ],
-                ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: _buildBody(context),
-                ),
+              Column(
+                children: [
+                  if (_controller.loading && _controller.hasData)
+                    Column(
+                      children: [
+                        const LinearProgressIndicator(minHeight: 2),
+                        if (_controller.loadingMessage != null)
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 20,
+                              vertical: 8,
+                            ),
+                            color: const Color(0xFF151A1F),
+                            child: Text(
+                              _controller.loadingMessage!,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(
+                                    color: Colors.white70,
+                                  ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: _buildBody(context),
+                    ),
+                  ),
+                ],
               ),
+              if (_controller.healReport != null)
+                Positioned(
+                  top: 12,
+                  left: 20,
+                  right: 20,
+                  child: _HealReportBanner(
+                    report: _controller.healReport!,
+                    onDismiss: _controller.dismissHealReport,
+                  ),
+                ),
             ],
           ),
         );
@@ -173,7 +191,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                             itemCount: _controller.visibleItems.length,
                             itemBuilder: (context, index) {
                               final item = _controller.visibleItems[index];
-                              return Tooltip(
+                              final card = Tooltip(
                                 message: item.name,
                                 excludeFromSemantics: true,
                                 child: ImageCard(
@@ -183,12 +201,18 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                                   title: item.name,
                                   showText: false,
                                   showBottomOverlay: false,
+                                  trailingLabel: item.isMissing
+                                      ? '丢失'
+                                      : (item.isLink ? '链接' : null),
                                   onTap: () => _handleEmojiTap(item),
                                   onLongPress: () => _showPreview(item),
                                   onSecondaryTapUp: (details) =>
                                       _showItemMenu(item, details.globalPosition),
                                 ),
                               );
+                              return item.isMissing
+                                  ? Opacity(opacity: 0.4, child: card)
+                                  : card;
                             },
                           ),
                   ),
@@ -289,15 +313,19 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     }
     final added = result?.imported.length ?? 0;
     final skipped = result?.skipped ?? 0;
+    final deduped = result?.deduped ?? 0;
+    final parts = <String>[
+      '已添加 $added 张图片',
+      if (deduped > 0) '去重链接 $deduped 张',
+      if (skipped > 0) '跳过 $skipped 项',
+    ];
     messenger.hideCurrentSnackBar();
     messenger.showSnackBar(
       SnackBar(
         content: Text(
-          added == 0
+          added == 0 && deduped == 0
               ? '拖入的内容中没有可用的图片'
-              : (skipped > 0
-                  ? '已添加 $added 张图片，跳过 $skipped 项'
-                  : '已添加 $added 张图片到「${_controller.selectedCategory ?? ''}」'),
+              : '${parts.join('，')}到「${_controller.selectedCategory ?? ''}」',
         ),
         duration: const Duration(seconds: 2),
       ),
@@ -988,8 +1016,8 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     );
   }
 
-  /// 右键菜单: 复制到剪贴板 / 预览与备注 / 刷新缩略图 /
-  /// 在资源管理器中显示 (仅 Windows) / 删除。
+  /// 右键菜单: 复制到剪贴板 / 预览与备注 / 添加到分类 / 从分类移除 /
+  /// 刷新缩略图 / 在资源管理器中显示 (仅 Windows) / 删除或移除失效链接。
   Future<void> _showItemMenu(EmojiItem item, Offset position) async {
     final overlay =
         Overlay.of(context).context.findRenderObject()! as RenderBox;
@@ -1016,6 +1044,31 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
             title: Text('预览与备注'),
           ),
         ),
+        if (!item.isMissing)
+          const PopupMenuItem<String>(
+            value: 'addToCategory',
+            child: ListTile(
+              leading: Icon(Icons.playlist_add),
+              title: Text('添加到分类…'),
+            ),
+          ),
+        if (item.isLink && !item.isMissing)
+          const PopupMenuItem<String>(
+            value: 'removeLink',
+            child: ListTile(
+              leading: Icon(Icons.link_off),
+              title: Text('从分类移除'),
+            ),
+          ),
+        if (item.isMissing)
+          const PopupMenuItem<String>(
+            value: 'removeMissingLink',
+            child: ListTile(
+              leading: Icon(Icons.link_off, color: Colors.orangeAccent),
+              title: Text('移除失效链接',
+                  style: TextStyle(color: Colors.orangeAccent)),
+            ),
+          ),
         const PopupMenuItem<String>(
           value: 'refresh',
           child: ListTile(
@@ -1031,14 +1084,15 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
               title: Text('在资源管理器中显示'),
             ),
           ),
-        const PopupMenuItem<String>(
-          value: 'delete',
-          child: ListTile(
-            leading: Icon(Icons.delete_outline, color: Colors.redAccent),
-            title: Text('删除这张图片',
-                style: TextStyle(color: Colors.redAccent)),
+        if (!item.isLink)
+          const PopupMenuItem<String>(
+            value: 'delete',
+            child: ListTile(
+              leading: Icon(Icons.delete_outline, color: Colors.redAccent),
+              title: Text('删除这张图片',
+                  style: TextStyle(color: Colors.redAccent)),
+            ),
           ),
-        ),
       ],
     );
     if (!mounted || selected == null) {
@@ -1049,6 +1103,12 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
         await _handleEmojiTap(item);
       case 'preview':
         await _showPreview(item);
+      case 'addToCategory':
+        await _showAddToCategoryDialog(item);
+      case 'removeLink':
+        await _removeLinkFromCategory(item);
+      case 'removeMissingLink':
+        await _removeMissingLinkItem(item);
       case 'refresh':
         await _refreshItemThumbnail(item);
       case 'reveal':
@@ -1056,6 +1116,122 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
       case 'delete':
         await _handleDeleteItem(item);
     }
+  }
+
+  /// "添加到分类…" 多选对话框: 把这张图同时加入若干其他分类 (建立链接)。
+  Future<void> _showAddToCategoryDialog(EmojiItem item) async {
+    final homeCategory = item.homeCategory ?? item.category;
+    final candidates = _controller.categories
+        .where((category) => category != homeCategory)
+        .toList();
+    if (candidates.isEmpty) {
+      return;
+    }
+
+    // 已经包含这张图的分类默认勾选 (链接已存在)。
+    final selected = <String>{
+      for (final category in candidates)
+        if (_controller.categoryContains(category, item.path)) category,
+    };
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: Text('把「${item.name}」添加到分类'),
+          content: SizedBox(
+            width: 280,
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                for (final category in candidates)
+                  CheckboxListTile(
+                    dense: true,
+                    title: Text(category),
+                    value: selected.contains(category),
+                    onChanged: (checked) {
+                      setDialogState(() {
+                        checked == true
+                            ? selected.add(category)
+                            : selected.remove(category);
+                      });
+                    },
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: selected.isEmpty
+                  ? null
+                  : () => Navigator.of(dialogContext).pop(true),
+              child: const Text('添加'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    var added = 0;
+    for (final category in selected) {
+      final ok = await _controller.addImageToCategory(
+        itemPath: item.path,
+        category: category,
+      );
+      if (ok) {
+        added += 1;
+      }
+    }
+    if (!mounted) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(added > 0 ? '已添加到 $added 个分类' : '未添加（可能已存在于所选分类）'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  /// 把链接项从其所在的链接分类中移除 (不动实体文件)。
+  Future<void> _removeLinkFromCategory(EmojiItem item) async {
+    final removed = await _controller.removeImageLink(item.path);
+    if (!mounted) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(removed ? '已从「${item.category}」移除（文件保留）' : '移除失败'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  /// 移除一条已置灰的失效链接记录。
+  Future<void> _removeMissingLinkItem(EmojiItem item) async {
+    final removed = await _controller.removeMissingLink(item.path);
+    if (!mounted) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(removed ? '已移除失效链接记录' : '移除失败'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   /// 删除图片 (带确认弹窗), 删除后用 SnackBar 反馈结果。
@@ -1231,6 +1407,121 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
         onMoveDown: () => _controller.moveItemDown(item.path),
         onMoveToStart: () => _controller.moveItemToStart(item.path),
         onMoveToEnd: () => _controller.moveItemToEnd(item.path),
+      ),
+    );
+  }
+}
+
+/// 链接自愈/丢失悬浮提示: 8 秒后自动消失, 可手动关闭。
+class _HealReportBanner extends StatefulWidget {
+  const _HealReportBanner({
+    required this.report,
+    required this.onDismiss,
+  });
+
+  final LinkHealReport report;
+  final VoidCallback onDismiss;
+
+  @override
+  State<_HealReportBanner> createState() => _HealReportBannerState();
+}
+
+class _HealReportBannerState extends State<_HealReportBanner> {
+  Timer? _autoDismissTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _autoDismissTimer = Timer(const Duration(seconds: 8), () {
+      if (mounted) {
+        widget.onDismiss();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _autoDismissTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final report = widget.report;
+    final lines = <String>[
+      for (final heal in report.healed)
+        '已自动恢复: ${heal.key} → ${heal.value}',
+      for (final path in report.missing) '无法恢复: $path',
+    ];
+
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xEE23282E),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.white12),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.35),
+              blurRadius: 16,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              report.missing.isEmpty
+                  ? Icons.verified_outlined
+                  : Icons.warning_amber_outlined,
+              color: report.missing.isEmpty
+                  ? Colors.lightGreenAccent
+                  : Colors.orangeAccent,
+              size: 20,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    report.missing.isEmpty
+                        ? '检测到 ${report.healed.length} 个失效链接，已全部自动恢复'
+                        : '检测到失效链接：恢复 ${report.healed.length} 个，'
+                            '无法恢复 ${report.missing.length} 个',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  for (final line in lines)
+                    Text(
+                      line,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            InkWell(
+              onTap: widget.onDismiss,
+              child: const Padding(
+                padding: EdgeInsets.all(4),
+                child: Icon(Icons.close, size: 16, color: Colors.white54),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

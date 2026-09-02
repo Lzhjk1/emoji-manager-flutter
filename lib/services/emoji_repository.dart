@@ -7,17 +7,22 @@ import 'package:path/path.dart' as p;
 import '../models/emoji_item.dart';
 import '../models/emoji_scan_result.dart';
 import '../models/sort_order.dart';
+import 'emoji_library_index.dart';
+import 'emoji_log_service.dart';
 import 'emoji_thumbnail_service.dart';
 
-/// 导入结果: 成功导入的表情列表与被跳过的数量 (非图片或读取失败)。
+/// 导入结果: 成功导入的表情列表、被跳过的数量 (非图片或读取失败)
+/// 与去重命中数量 (已有同内容图片, 只建立链接不复制)。
 class ImportResult {
   const ImportResult({
     required this.imported,
     required this.skipped,
+    this.deduped = 0,
   });
 
   final List<EmojiItem> imported;
   final int skipped;
+  final int deduped;
 }
 
 /// 表情库的磁盘数据访问层。
@@ -27,6 +32,9 @@ class ImportResult {
 /// - `emoji_image_order.json`: 手动排序文件
 /// - `emoji_remarks.json`: 图片备注表 (文件名 -> 备注)
 /// - `.emoji_manager/`: 缩略图缓存与索引 (由 [EmojiThumbnailService] 管理)
+///
+/// 一图多分类: 文件实体始终在 home 分类目录中; 中央索引 `library.json`
+/// (由 [EmojiLibraryIndex] 管理) 记录额外的分类链接, 扫描时应用到结果中。
 class EmojiRepository {
   EmojiRepository({
     EmojiThumbnailService? thumbnailService,
@@ -35,8 +43,8 @@ class EmojiRepository {
   /// 根目录直属图片归属的虚拟分类名。
   static const uncategorized = '未分类';
 
-  /// 始终忽略的目录名 (同步工具目录等)。
-  static const defaultIgnoredDirectories = <String>{'.sync'};
+  /// 始终忽略的目录名 (同步工具目录、日志目录等)。
+  static const defaultIgnoredDirectories = <String>{'.sync', 'logs'};
   static const _orderFileName = 'emoji_image_order.json';
   static const _remarksFileName = 'emoji_remarks.json';
   static const _imageExtensions = <String>{
@@ -49,13 +57,24 @@ class EmojiRepository {
   };
 
   final EmojiThumbnailService _thumbnailService;
+  final EmojiLibraryIndex _libraryIndex = EmojiLibraryIndex();
+
+  /// size 预筛索引: 字节数 -> 相对路径集合 (扫描时构建, 去重/自愈共用)。
+  final Map<int, Set<String>> _sizeIndex = {};
+  /// 文件名索引: 文件名 (含扩展名) -> 相对路径集合 (自愈候选线索)。
+  final Map<String, Set<String>> _nameIndex = {};
+  /// 相对路径 -> 已知哈希 (会话内缓存, 来源: 注册表反查 + 本次会话计算)。
+  final Map<String, String> _hashByPath = {};
 
   /// 扫描整个表情库, 返回分类 -> 表情列表 及分类元数据。
   ///
-  /// 同时完成三件事:
+  /// 同时完成五件事:
   /// 1. 递归收集每个分类下的图片并组装 [EmojiItem];
   /// 2. 确保缩略图存在 (必要时在后台 isolate 生成);
-  /// 3. 以本次扫描到的源图集合清理缩略图索引中的过期条目。
+  /// 3. 以本次扫描到的源图集合清理缩略图索引中的过期条目;
+  /// 4. 构建 size/文件名索引供去重与自愈使用;
+  /// 5. 对账中央索引: 应用分类链接, 失效链接先自愈 (按 size+哈希找回),
+  ///    找不回的置灰保留并写入报告。
   Future<EmojiScanResult> scanWithMetadata(
     String rootPath, {
     Set<String> ignoredDirectoryNames = const {},
@@ -72,6 +91,8 @@ class EmojiRepository {
       rootPath,
       ignoredDirectoryNames: ignoredDirectoryNames,
     );
+    await _libraryIndex.load(rootPath);
+    _rebuildHashByPath();
 
     final itemsByCategory = <String, List<EmojiItem>>{};
     final metadata = <String, CategoryMetadata>{};
@@ -132,15 +153,181 @@ class EmojiRepository {
       itemsByCategory[uncategorized] = uncategorizedItems;
     }
 
+    // 对账中央索引: 应用分类链接 + 自愈失效链接。
+    final healReport = LinkHealReport();
+    await _applyLinks(
+      rootPath: rootPath,
+      itemsByCategory: itemsByCategory,
+      metadata: metadata,
+      remarksByPath: remarksByPath,
+      thumbnailIndex: thumbnailIndex,
+      activeSourcePaths: activeSourcePaths,
+      healReport: healReport,
+    );
+
     await _thumbnailService.saveIndex(
       rootPath: rootPath,
       index: thumbnailIndex,
       activeSourcePaths: activeSourcePaths,
     );
 
+    EmojiLogService.instance.info(
+      '扫描完成: ${metadata.length} 个分类, '
+      '${itemsByCategory.values.fold<int>(0, (sum, items) => sum + items.length)} 张图',
+    );
+
     return EmojiScanResult(
       itemsByCategory: itemsByCategory,
       categoryMetadata: metadata,
+    )..healReport = healReport;
+  }
+
+  /// 把索引中的分类链接应用到扫描结果; 失效链接先自愈再应用,
+  /// 找不回的以置灰占位项呈现 (isMissing), 并记录报告与日志。
+  Future<void> _applyLinks({
+    required String rootPath,
+    required Map<String, List<EmojiItem>> itemsByCategory,
+    required Map<String, CategoryMetadata> metadata,
+    required Map<String, String> remarksByPath,
+    required Map<String, ThumbnailEntry> thumbnailIndex,
+    required Set<String> activeSourcePaths,
+    required LinkHealReport healReport,
+  }) async {
+    if (_libraryIndex.links.isEmpty) {
+      return;
+    }
+
+    var indexDirty = false;
+    final links = _libraryIndex.links.values.toList(growable: false);
+    for (final link in links) {
+      var file = File(p.join(rootPath, link.path));
+      if (!file.existsSync()) {
+        final healedPath = await _selfHealLink(rootPath, link, healReport);
+        if (healedPath != null) {
+          indexDirty = true;
+          file = File(p.join(rootPath, healedPath));
+        } else {
+          if (!link.missing) {
+            link.missing = true;
+            indexDirty = true;
+          }
+          healReport.missing.add(link.path);
+          EmojiLogService.instance
+              .warn('无法恢复的链接: "${link.path}" (无可匹配候选)');
+          for (final category in link.categories) {
+            if (!metadata.containsKey(category)) {
+              continue;
+            }
+            itemsByCategory.putIfAbsent(category, () => []).add(
+                  _buildMissingLinkItem(link, category, rootPath: rootPath),
+                );
+          }
+          continue;
+        }
+      } else if (link.missing) {
+        link.missing = false;
+        indexDirty = true;
+        EmojiLogService.instance.info('置灰链接已恢复: "${link.path}"');
+      }
+
+      final homeCategory = homeCategoryOf(rootPath, file.path);
+      for (final category in link.categories) {
+        if (!metadata.containsKey(category)) {
+          EmojiLogService.instance.warn(
+            '链接目标分类不存在, 跳过: "${link.path}" -> "$category"',
+          );
+          continue;
+        }
+        final item = await _toEmojiItem(
+          file,
+          category,
+          rootPath: rootPath,
+          thumbnailIndex: thumbnailIndex,
+          activeSourcePaths: activeSourcePaths,
+          remark: remarksByPath[file.path],
+          isLink: true,
+          homeCategory: homeCategory,
+        );
+        itemsByCategory.putIfAbsent(category, () => []).add(item);
+      }
+    }
+
+    if (indexDirty) {
+      await _libraryIndex.save(rootPath);
+    }
+  }
+
+  /// 尝试自愈一条失效链接: 按 size + 文件名筛候选, 哈希验证命中后更新路径。
+  /// 成功返回新的相对路径, 失败返回 null。
+  Future<String?> _selfHealLink(
+    String rootPath,
+    LibraryLink link,
+    LinkHealReport healReport,
+  ) async {
+    EmojiLogService.instance
+        .warn('链接失效: "${link.path}" (size=${link.size}) -> 尝试自愈');
+    final oldName = p.basename(link.path);
+    final oldDir = p.dirname(link.path);
+    final candidates = <String>{
+      ..._sizeIndex[link.size] ?? const <String>{},
+      ..._nameIndex[oldName] ?? const <String>{},
+    }..remove(link.path);
+
+    int score(String candidate) {
+      var value = 0;
+      if (p.dirname(candidate) == oldDir) {
+        value -= 4;
+      }
+      if (p.basename(candidate) == oldName) {
+        value -= 2;
+      }
+      return value;
+    }
+
+    final ranked = candidates.toList()
+      ..sort((left, right) {
+        final byScore = score(left).compareTo(score(right));
+        if (byScore != 0) {
+          return byScore;
+        }
+        return left.length.compareTo(right.length);
+      });
+
+    for (final candidate in ranked) {
+      final candidateFile = File(p.join(rootPath, candidate));
+      final candidateHash =
+          _hashByPath[candidate] ?? await computeFileSha256(candidateFile);
+      if (candidateHash == null) {
+        continue;
+      }
+      _hashByPath[candidate] = candidateHash;
+      if (candidateHash == link.hash) {
+        _libraryIndex.updateLinkPath(link.path, candidate);
+        healReport.healed.add(MapEntry(link.path, candidate));
+        EmojiLogService.instance
+            .info('自愈成功: "${link.path}" -> "$candidate" (hash 匹配)');
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  /// 构造失效链接的置灰占位项 (文件已不在磁盘上)。
+  EmojiItem _buildMissingLinkItem(
+    LibraryLink link,
+    String category, {
+    required String rootPath,
+  }) {
+    final extension = p.extension(link.path).toLowerCase();
+    return EmojiItem(
+      path: p.join(rootPath, link.path),
+      name: p.basename(link.path),
+      mimeType: _mimeTypeForExtension(extension),
+      category: category,
+      lastModified: 0,
+      fileSize: link.size,
+      isLink: true,
+      isMissing: true,
     );
   }
 
@@ -167,6 +354,8 @@ class EmojiRepository {
   /// - byName: 忽略大小写按名称升序;
   /// - byTime: 按修改时间倒序 (最新在前);
   /// - byOrder: 读取分类的顺序文件, 未登记的图片排在末尾并按名称兜底。
+  ///
+  /// 链接项不参与排序规则, 始终按加入顺序排在原生项之后。
   Future<List<EmojiItem>> sortCategoryItems({
     required String rootPath,
     required String category,
@@ -177,31 +366,39 @@ class EmojiRepository {
       return items;
     }
 
+    final nativeItems = items.where((item) => !item.isLink).toList();
+    final linkItems = items.where((item) => item.isLink).toList();
+    if (nativeItems.isEmpty) {
+      return items;
+    }
+
+    final List<EmojiItem> sortedNative;
     switch (sortOrder) {
       case SortOrder.byName:
-        final sorted = [...items]..sort(
+        sortedNative = nativeItems
+          ..sort(
             (left, right) => left.name.toLowerCase().compareTo(right.name.toLowerCase()),
           );
-        return sorted;
+        break;
       case SortOrder.byTime:
-        final sorted = [...items]
+        sortedNative = nativeItems
           ..sort((left, right) => right.lastModified.compareTo(left.lastModified));
-        return sorted;
+        break;
       case SortOrder.byOrder:
         final order = await readOrderForCategory(rootPath, category);
         if (order.isEmpty) {
-          final sorted = [...items]
+          sortedNative = nativeItems
             ..sort(
               (left, right) =>
                   left.name.toLowerCase().compareTo(right.name.toLowerCase()),
             );
-          return sorted;
+          break;
         }
 
         final orderIndex = <String, int>{
           for (var index = 0; index < order.length; index++) order[index]: index,
         };
-        final sorted = [...items]
+        sortedNative = nativeItems
           ..sort((left, right) {
             final leftIndex = orderIndex[left.name] ?? 1 << 30;
             final rightIndex = orderIndex[right.name] ?? 1 << 30;
@@ -210,8 +407,9 @@ class EmojiRepository {
             }
             return left.name.toLowerCase().compareTo(right.name.toLowerCase());
           });
-        return sorted;
+        break;
     }
+    return [...sortedNative, ...linkItems];
   }
 
   /// 读取分类的顺序文件 (`emoji_image_order.json`), 返回图片名列表。
@@ -304,8 +502,87 @@ class EmojiRepository {
     );
   }
 
-  /// 删除图片文件, 并同步清理其备注条目、顺序文件条目与缩略图缓存。
-  /// 文件不存在或删除失败时返回 false。
+  /// 把一张已有图片加入其他分类 (建立索引链接, 不复制文件)。
+  /// 返回新分类下的链接项; 已在该分类 / 文件缺失 / 哈希失败时返回 null。
+  Future<EmojiItem?> addImageToCategory({
+    required String rootPath,
+    required EmojiItem item,
+    required String category,
+  }) async {
+    final homeCategory = item.homeCategory ?? item.category;
+    if (category == homeCategory) {
+      return null;
+    }
+    final file = File(item.path);
+    if (!file.existsSync()) {
+      return null;
+    }
+
+    final relativePath = p.relative(item.path, from: rootPath);
+    final size = item.fileSize > 0 ? item.fileSize : file.statSync().size;
+    var hash = _hashByPath[relativePath];
+    hash ??= await computeFileSha256(file);
+    if (hash == null) {
+      return null;
+    }
+    _registerHash(hash, relativePath);
+
+    if (!_libraryIndex.addLink(
+      relativePath: relativePath,
+      category: category,
+      hash: hash,
+      size: size,
+    )) {
+      return null;
+    }
+    await _libraryIndex.save(rootPath);
+    EmojiLogService.instance.info('添加链接: "$relativePath" -> 分类 "$category"');
+
+    return item.copyWith(
+      category: category,
+      isLink: true,
+      isMissing: false,
+      homeCategory: homeCategory,
+    );
+  }
+
+  /// 把图片从链接分类 [category] 中移除 (只删索引链接, 不动文件)。
+  Future<bool> removeImageLinkFromCategory({
+    required String rootPath,
+    required EmojiItem item,
+    required String category,
+  }) async {
+    final relativePath = p.relative(item.path, from: rootPath);
+    final removed = _libraryIndex.removeLinkFromCategory(
+      relativePath: relativePath,
+      category: category,
+    );
+    if (removed) {
+      await _libraryIndex.save(rootPath);
+      EmojiLogService.instance
+          .info('移除链接: "$relativePath" 从分类 "$category"');
+    }
+    return removed;
+  }
+
+  /// 移除一条已置灰的失效链接记录。
+  Future<bool> removeMissingLink({
+    required String rootPath,
+    required EmojiItem item,
+  }) async {
+    final relativePath = p.relative(item.path, from: rootPath);
+    final link = _libraryIndex.links[relativePath];
+    if (link == null || !link.missing) {
+      return false;
+    }
+    _libraryIndex.removeLink(relativePath);
+    await _libraryIndex.save(rootPath);
+    EmojiLogService.instance.info('移除失效链接记录: "$relativePath"');
+    return true;
+  }
+
+  /// 删除图片文件, 并同步清理其备注条目、顺序文件条目、缩略图缓存
+  /// 与指向它的所有索引链接。文件不存在或删除失败时返回 false。
   Future<bool> deleteImage({
     required String rootPath,
     required String category,
@@ -315,6 +592,7 @@ class EmojiRepository {
     if (!imageFile.existsSync()) {
       return false;
     }
+    final relativePath = p.relative(item.path, from: rootPath);
 
     // 1. 从所在目录的备注文件中移除备注条目。
     final folder = imageFile.parent;
@@ -363,7 +641,15 @@ class EmojiRepository {
       activeSourcePaths: thumbnailIndex.keys.toSet(),
     );
 
-    // 4. 删除图片文件本身。
+    // 4. 清理中央索引: 指向该文件的所有链接与哈希登记。
+    _libraryIndex.removeLink(relativePath);
+    _libraryIndex.forgetHashByPath(relativePath);
+    _hashByPath.remove(relativePath);
+    _sizeIndex[item.fileSize]?.remove(relativePath);
+    await _libraryIndex.save(rootPath);
+    EmojiLogService.instance.info('删除图片并清理索引链接: "$relativePath"');
+
+    // 5. 删除图片文件本身。
     await imageFile.delete();
     return true;
   }
@@ -425,7 +711,8 @@ class EmojiRepository {
   }
 
   /// 把拖入的文件/目录导入到 [category] 对应的目录。
-  /// 目录会递归展开; 非图片文件被跳过。
+  /// 目录会递归展开; 非图片文件被跳过;
+  /// 与库中已有内容相同的图片不复制, 只建立分类链接 (去重)。
   Future<ImportResult> importDroppedPaths({
     required String rootPath,
     required String category,
@@ -443,6 +730,7 @@ class EmojiRepository {
 
     final imported = <EmojiItem>[];
     var skipped = 0;
+    var deduped = 0;
     for (final path in imagePaths) {
       final item = await _importImageToCategory(
         rootPath: rootPath,
@@ -452,10 +740,13 @@ class EmojiRepository {
       if (item == null) {
         skipped += 1;
       } else {
+        if (item.isLink) {
+          deduped += 1;
+        }
         imported.add(item);
       }
     }
-    return ImportResult(imported: imported, skipped: skipped);
+    return ImportResult(imported: imported, skipped: skipped, deduped: deduped);
   }
 
   /// 递归收集目录下的图片路径, 跳过隐藏目录 (如 .sync / 缓存目录)。
@@ -481,6 +772,10 @@ class EmojiRepository {
   /// 真实格式从文件头嗅探得出, 因为拖拽来源 (如 QQ) 给出的临时文件
   /// 扩展名经常与内容不符。若源文件本就在目标目录中, 则原地复用、
   /// 保留原文件名 (目录扫描依赖扩展名, 需保持一致)。
+  ///
+  /// 去重: 导入前流式计算源文件 SHA-256, 先按注册表快速命中,
+  /// 再按 size 预筛候选并哈希精验; 命中时不复制, 只为已有文件建立
+  /// 指向当前分类的索引链接。
   /// 源文件缺失或不是受支持的图片时返回 null。
   Future<EmojiItem?> _importImageToCategory({
     required String rootPath,
@@ -499,20 +794,81 @@ class EmojiRepository {
     final categoryDirectory = _resolveCategoryDirectory(rootPath, category);
     await categoryDirectory.create(recursive: true);
 
+    // 原地复用: 保留磁盘上的原文件名, 与目录扫描器的扩展名约定保持一致。
+    if (_isInsideDirectory(sourcePath, categoryDirectory.path)) {
+      return _importInPlace(
+        sourceFile: sourceFile,
+        category: category,
+        rootPath: rootPath,
+      );
+    }
+
+    // 去重: 内容相同的图已存在时不复制, 改为建立链接。
+    final sourceSize = sourceFile.statSync().size;
+    final sourceHash = await computeFileSha256(sourceFile);
+    if (sourceHash != null) {
+      final duplicate = await _findDuplicateRelativePath(
+        rootPath: rootPath,
+        hash: sourceHash,
+        size: sourceSize,
+      );
+      if (duplicate != null) {
+        final duplicateFile = File(p.join(rootPath, duplicate));
+        final homeCategory = homeCategoryOf(rootPath, duplicateFile.path);
+        if (homeCategory == category) {
+          // 已存在于目标分类, 无需处理, 返回现有条目。
+          final thumbnailIndex = await _thumbnailService.loadIndex(rootPath);
+          return _toEmojiItem(
+            duplicateFile,
+            category,
+            rootPath: rootPath,
+            thumbnailIndex: thumbnailIndex,
+            activeSourcePaths: {duplicate},
+            remark: null,
+          );
+        }
+        if (_libraryIndex.addLink(
+          relativePath: duplicate,
+          category: category,
+          hash: sourceHash,
+          size: sourceSize,
+        )) {
+          await _libraryIndex.save(rootPath);
+          EmojiLogService.instance.info(
+            '去重命中: "$duplicate" 已存在, 建立链接到分类 "$category" (hash=${sourceHash.substring(0, 12)}...)',
+          );
+          final thumbnailIndex = await _thumbnailService.loadIndex(rootPath);
+          return _toEmojiItem(
+            duplicateFile,
+            category,
+            rootPath: rootPath,
+            thumbnailIndex: thumbnailIndex,
+            activeSourcePaths: {duplicate},
+            remark: null,
+            isLink: true,
+            homeCategory: homeCategory,
+          );
+        }
+      }
+    }
+
     String targetPath;
     String resultExtension;
-    if (_isInsideDirectory(sourcePath, categoryDirectory.path)) {
-      // 原地复用: 保留磁盘上的原文件名, 与目录扫描器的扩展名约定保持一致。
-      targetPath = sourceFile.path;
-      resultExtension = p.extension(sourceFile.path).toLowerCase();
-    } else {
-      targetPath = _reserveTargetPath(
-        categoryDirectory.path,
-        sourceFile,
-        detectedExtension,
-      );
-      await sourceFile.copy(targetPath);
-      resultExtension = detectedExtension;
+    targetPath = _reserveTargetPath(
+      categoryDirectory.path,
+      sourceFile,
+      detectedExtension,
+    );
+    await sourceFile.copy(targetPath);
+    resultExtension = detectedExtension;
+
+    if (sourceHash != null) {
+      final relativeTarget = p.relative(targetPath, from: rootPath);
+      _registerHash(sourceHash, relativeTarget);
+      _sizeIndex.putIfAbsent(sourceSize, () => <String>{}).add(relativeTarget);
+      _nameIndex
+          .putIfAbsent(p.basename(targetPath), () => <String>{})
+          .add(relativeTarget);
     }
 
     final thumbnailIndex = await _thumbnailService.loadIndex(rootPath);
@@ -530,13 +886,7 @@ class EmojiRepository {
       activeSourcePaths: {...thumbnailIndex.keys, relativeSourcePath},
     );
 
-    final mimeType = switch (resultExtension) {
-      '.gif' => 'image/gif',
-      '.png' => 'image/png',
-      '.webp' => 'image/webp',
-      '.bmp' => 'image/bmp',
-      _ => 'image/jpeg',
-    };
+    final mimeType = _mimeTypeForExtension(resultExtension);
 
     return EmojiItem(
       path: targetPath,
@@ -545,7 +895,57 @@ class EmojiRepository {
       category: category,
       lastModified: lastModified,
       thumbnailPath: thumbnailPath,
+      fileSize: sourceSize,
+      homeCategory: category,
     );
+  }
+
+  /// 源文件已在目标目录中: 原地复用并登记索引。
+  Future<EmojiItem> _importInPlace({
+    required File sourceFile,
+    required String category,
+    required String rootPath,
+  }) async {
+    final thumbnailIndex = await _thumbnailService.loadIndex(rootPath);
+    return _toEmojiItem(
+      sourceFile,
+      category,
+      rootPath: rootPath,
+      thumbnailIndex: thumbnailIndex,
+      activeSourcePaths: {p.relative(sourceFile.path, from: rootPath)},
+    );
+  }
+
+  /// 查找库中与 [hash] 相同内容的已有图片相对路径。
+  /// 先查注册表快速命中, 再用 size 预筛出候选逐个哈希精验。
+  Future<String?> _findDuplicateRelativePath({
+    required String rootPath,
+    required String hash,
+    required int size,
+  }) async {
+    final registered = _libraryIndex.hashes[hash];
+    if (registered != null && File(p.join(rootPath, registered)).existsSync()) {
+      return registered;
+    }
+
+    final candidates = _sizeIndex[size] ?? const <String>{};
+    for (final candidate in candidates) {
+      final candidateFile = File(p.join(rootPath, candidate));
+      if (!candidateFile.existsSync()) {
+        continue;
+      }
+      final candidateHash =
+          _hashByPath[candidate] ?? await computeFileSha256(candidateFile);
+      if (candidateHash == null) {
+        continue;
+      }
+      _hashByPath[candidate] = candidateHash;
+      _libraryIndex.registerHash(candidateHash, candidate);
+      if (candidateHash == hash) {
+        return candidate;
+      }
+    }
+    return null;
   }
 
   /// 判断 [filePath] 是否直接位于 [directoryPath] 下 (不含子目录)。
@@ -732,7 +1132,8 @@ class EmojiRepository {
         : Directory(p.join(rootPath, category));
   }
 
-  /// 把一个文件组装为 [EmojiItem], 途中确保缩略图存在并登记活跃路径。
+  /// 把一个文件组装为 [EmojiItem], 途中确保缩略图存在、登记活跃路径,
+  /// 并把文件的 size/文件名登记进去重与自愈索引。
   Future<EmojiItem> _toEmojiItem(
     File file,
     String category, {
@@ -740,16 +1141,12 @@ class EmojiRepository {
     required Map<String, ThumbnailEntry> thumbnailIndex,
     required Set<String> activeSourcePaths,
     String? remark,
+    bool isLink = false,
+    String? homeCategory,
   }) async {
     final extension = p.extension(file.path).toLowerCase();
-    final mimeType = switch (extension) {
-      '.gif' => 'image/gif',
-      '.png' => 'image/png',
-      '.webp' => 'image/webp',
-      '.bmp' => 'image/bmp',
-      _ => 'image/jpeg',
-    };
-    final lastModified = file.statSync().modified.millisecondsSinceEpoch;
+    final stat = file.statSync();
+    final lastModified = stat.modified.millisecondsSinceEpoch;
     final relativeSourcePath = p.relative(file.path, from: rootPath);
     activeSourcePaths.add(relativeSourcePath);
     final thumbnailPath = await _thumbnailService.ensureThumbnail(
@@ -758,15 +1155,22 @@ class EmojiRepository {
       sourceModified: lastModified,
       index: thumbnailIndex,
     );
+    _sizeIndex.putIfAbsent(stat.size, () => <String>{}).add(relativeSourcePath);
+    _nameIndex
+        .putIfAbsent(p.basename(file.path), () => <String>{})
+        .add(relativeSourcePath);
 
     return EmojiItem(
       path: file.path,
       name: p.basename(file.path),
-      mimeType: mimeType,
+      mimeType: _mimeTypeForExtension(extension),
       category: category,
       lastModified: lastModified,
       thumbnailPath: thumbnailPath,
       remark: remark,
+      fileSize: stat.size,
+      homeCategory: homeCategory ?? category,
+      isLink: isLink,
     );
   }
 
@@ -777,5 +1181,37 @@ class EmojiRepository {
       EmojiThumbnailService.cacheDirectoryName,
       ...ignoredDirectoryNames.map((item) => item.trim()).where((item) => item.isNotEmpty),
     };
+  }
+
+  /// 从注册表反查重建 相对路径 -> 哈希 缓存。
+  void _rebuildHashByPath() {
+    _hashByPath.clear();
+    _libraryIndex.hashes.forEach((hash, path) {
+      _hashByPath[path] = hash;
+    });
+  }
+
+  /// 登记哈希 (注册表 + 会话缓存)。
+  void _registerHash(String hash, String relativePath) {
+    _libraryIndex.registerHash(hash, relativePath);
+    _hashByPath[relativePath] = hash;
+  }
+
+  /// 根据扩展名映射 MIME 类型。
+  static String _mimeTypeForExtension(String extension) {
+    return switch (extension) {
+      '.gif' => 'image/gif',
+      '.png' => 'image/png',
+      '.webp' => 'image/webp',
+      '.bmp' => 'image/bmp',
+      _ => 'image/jpeg',
+    };
+  }
+
+  /// 实体文件所在目录对应的 home 分类名 (根目录直属文件为"未分类")。
+  static String homeCategoryOf(String rootPath, String absolutePath) {
+    final relative = p.relative(absolutePath, from: rootPath);
+    final parts = p.split(relative);
+    return parts.length <= 1 ? uncategorized : parts.first;
   }
 }

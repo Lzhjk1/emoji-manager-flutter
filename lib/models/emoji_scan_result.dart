@@ -1,5 +1,18 @@
 import 'emoji_item.dart';
 
+/// 链接自愈报告: 一次扫描对账中 link 的恢复与丢失情况 (不持久化)。
+class LinkHealReport {
+  LinkHealReport();
+
+  /// 成功恢复的 (旧路径 -> 新路径)。
+  final List<MapEntry<String, String>> healed = [];
+
+  /// 无法恢复而置灰的路径。
+  final List<String> missing = [];
+
+  bool get isEmpty => healed.isEmpty && missing.isEmpty;
+}
+
 /// 分类的元数据: 分类名、对应磁盘目录路径及修改时间。
 class CategoryMetadata {
   const CategoryMetadata({
@@ -44,6 +57,9 @@ class EmojiScanResult {
 
   /// 分类名 -> 分类元数据。
   final Map<String, CategoryMetadata> categoryMetadata;
+
+  /// 本次扫描对账时的链接自愈报告 (瞬态信息, 不参与序列化与缓存)。
+  LinkHealReport? healReport;
 
   /// 构造空结果 (表情库为空或扫描失败时使用)。
   factory EmojiScanResult.empty() {

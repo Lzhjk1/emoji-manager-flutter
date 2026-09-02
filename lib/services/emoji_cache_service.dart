@@ -11,6 +11,9 @@ import '../models/emoji_scan_result.dart';
 /// 把 [EmojiScanResult] 按 rootPath 为键持久化到应用支持目录,
 /// 下次启动同一表情库时可跳过完整扫描直接加载, 加快冷启动。
 class EmojiCacheService {
+  /// 缓存结构版本: 字段变化时 +1, 使旧缓存整体失效重建。
+  static const cacheSchemaVersion = 2;
+
   /// 加载与 [rootPath] 匹配的缓存; 不存在、根路径不一致或内容损坏时返回 null。
   Future<EmojiScanResult?> load(String rootPath) async {
     final file = await _cacheFileForPath(rootPath);
@@ -22,6 +25,10 @@ class EmojiCacheService {
       final text = await file.readAsString();
       final json = jsonDecode(text);
       if (json is! Map<String, dynamic>) {
+        return null;
+      }
+
+      if (json['schemaVersion'] != cacheSchemaVersion) {
         return null;
       }
 
@@ -45,6 +52,7 @@ class EmojiCacheService {
     final file = await _cacheFileForPath(rootPath);
     await file.parent.create(recursive: true);
     final payload = <String, dynamic>{
+      'schemaVersion': cacheSchemaVersion,
       'rootPath': rootPath,
       'payload': result.toJson(),
     };

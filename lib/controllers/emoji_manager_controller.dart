@@ -7,6 +7,7 @@ import '../models/emoji_item.dart';
 import '../models/emoji_scan_result.dart';
 import '../models/sort_order.dart';
 import '../services/emoji_cache_service.dart';
+import '../services/emoji_log_service.dart';
 import '../services/emoji_repository.dart';
 import '../services/emoji_settings_service.dart';
 import '../services/window_control_service.dart';
@@ -58,6 +59,7 @@ class EmojiManagerController extends ChangeNotifier {
   int _hotkeyModifiers = WindowControlService.hotkeyModifierControl |
       WindowControlService.hotkeyModifierShift;
   int _hotkeyKeyCode = 0x56; // 'V'
+  LinkHealReport? _healReport;
 
   bool get loading => _loading;
   String? get rootPath => _rootPath;
@@ -76,6 +78,19 @@ class EmojiManagerController extends ChangeNotifier {
   bool get hotkeyEnabled => _hotkeyEnabled;
   int get hotkeyModifiers => _hotkeyModifiers;
   int get hotkeyKeyCode => _hotkeyKeyCode;
+
+  /// 最近一次扫描对账的链接自愈报告 (无事件时为 null, 供悬浮提示展示)。
+  LinkHealReport? get healReport => _healReport;
+
+  /// 关闭自愈报告提示。
+  void dismissHealReport() {
+    if (_healReport == null) {
+      return;
+    }
+    _healReport = null;
+    notifyListeners();
+  }
+
   List<String> get categories => _itemsByCategory.keys.toList(growable: false);
   bool get hasData => _itemsByCategory.isNotEmpty;
 
@@ -177,6 +192,7 @@ class EmojiManagerController extends ChangeNotifier {
     _hotkeyModifiers = await _settingsService.loadHotkeyModifiers();
     _hotkeyKeyCode = await _settingsService.loadHotkeyKeyCode();
     _rootPath = await _settingsService.loadRootPath();
+    await EmojiLogService.instance.startSession(_rootPath);
     await _applyWindowSettings();
     await _applyHotkeySettings();
 
@@ -228,6 +244,7 @@ class EmojiManagerController extends ChangeNotifier {
     notifyListeners();
 
     await _settingsService.saveRootPath(selectedPath);
+    await EmojiLogService.instance.startSession(selectedPath);
     final cached = await _cacheService.load(selectedPath);
     if (cached != null) {
       _categoryMetadata = cached.categoryMetadata;
@@ -280,6 +297,11 @@ class EmojiManagerController extends ChangeNotifier {
           categoryMetadata: _categoryMetadata,
         ),
       );
+      // 链接自愈/丢失事件交给 UI 悬浮提示。
+      if (result.healReport != null && !result.healReport!.isEmpty) {
+        _healReport = result.healReport;
+        notifyListeners();
+      }
     } catch (error) {
       _loading = false;
       _loadingMessage = null;
@@ -536,7 +558,108 @@ class EmojiManagerController extends ChangeNotifier {
     return result;
   }
 
+  /// 把一张已有图片加入其他分类 (建立索引链接, 不复制文件)。
+  /// 成功返回 true 并把链接项追加到目标分类列表末尾。
+  Future<bool> addImageToCategory({
+    required String itemPath,
+    required String category,
+  }) async {
+    final rootPath = _rootPath;
+    if (rootPath == null || rootPath.isEmpty) {
+      return false;
+    }
+    // 以实体文件所在分类中的条目为准 (home 分类一定包含它)。
+    final homeItem = _findHomeItem(itemPath);
+    if (homeItem == null) {
+      return false;
+    }
+    if (category == (homeItem.homeCategory ?? homeItem.category)) {
+      return false;
+    }
+
+    final linked = await _repository.addImageToCategory(
+      rootPath: rootPath,
+      item: homeItem,
+      category: category,
+    );
+    if (linked == null) {
+      return false;
+    }
+
+    final existing = _itemsByCategory[category] ?? <EmojiItem>[];
+    if (!existing.any((item) => item.path == linked.path)) {
+      _itemsByCategory[category] = [...existing, linked];
+    }
+    await _saveCache();
+    notifyListeners();
+    return true;
+  }
+
+  /// 把链接项从当前所在的链接分类中移除 (不动实体文件)。
+  Future<bool> removeImageLink(String itemPath) async {
+    final entry = _findItemEntry(itemPath);
+    final rootPath = _rootPath;
+    if (entry == null || rootPath == null) {
+      return false;
+    }
+    final item = entry.items[entry.index];
+    if (!item.isLink) {
+      return false;
+    }
+
+    final removed = await _repository.removeImageLinkFromCategory(
+      rootPath: rootPath,
+      item: item,
+      category: entry.category,
+    );
+    if (!removed) {
+      return false;
+    }
+
+    final items = [...entry.items]..removeAt(entry.index);
+    if (items.isEmpty) {
+      _itemsByCategory.remove(entry.category);
+    } else {
+      _itemsByCategory[entry.category] = items;
+    }
+    await _saveCache();
+    notifyListeners();
+    return true;
+  }
+
+  /// 移除一条已置灰的失效链接记录。
+  Future<bool> removeMissingLink(String itemPath) async {
+    final entry = _findItemEntry(itemPath);
+    final rootPath = _rootPath;
+    if (entry == null || rootPath == null) {
+      return false;
+    }
+    final item = entry.items[entry.index];
+    if (!item.isMissing) {
+      return false;
+    }
+
+    final removed = await _repository.removeMissingLink(
+      rootPath: rootPath,
+      item: item,
+    );
+    if (!removed) {
+      return false;
+    }
+
+    final items = [...entry.items]..removeAt(entry.index);
+    if (items.isEmpty) {
+      _itemsByCategory.remove(entry.category);
+    } else {
+      _itemsByCategory[entry.category] = items;
+    }
+    await _saveCache();
+    notifyListeners();
+    return true;
+  }
+
   /// 删除图片文件 (连同缩略图与元数据条目), 并从内存状态中移除;
+  /// 同时清理各链接分类中的同路径条目;
   /// 找不到条目或删除失败时返回 false。
   Future<bool> deleteItem(String itemPath) async {
     final entry = _findItemEntry(itemPath);
@@ -554,16 +677,27 @@ class EmojiManagerController extends ChangeNotifier {
       return false;
     }
 
-    final items = [...entry.items]..removeAt(entry.index);
-    if (items.isEmpty) {
-      _itemsByCategory.remove(entry.category);
-      if (_selectedCategory == entry.category) {
-        _selectedCategory = _itemsByCategory.isEmpty
-            ? null
-            : _itemsByCategory.keys.first;
+    // 从所有分类 (含链接分类) 中移除同路径条目。
+    final emptied = <String>[];
+    _itemsByCategory.forEach((category, items) {
+      final remaining = items.where((item) => item.path != itemPath).toList();
+      if (remaining.length != items.length) {
+        if (remaining.isEmpty) {
+          emptied.add(category);
+        } else {
+          _itemsByCategory[category] = remaining;
+        }
       }
-    } else {
-      _itemsByCategory[entry.category] = items;
+    });
+    for (final category in emptied) {
+      _itemsByCategory.remove(category);
+    }
+    if (_selectedCategory != null &&
+        !_isSpecialView &&
+        !_itemsByCategory.containsKey(_selectedCategory)) {
+      _selectedCategory = _itemsByCategory.isEmpty
+          ? null
+          : _itemsByCategory.keys.first;
     }
 
     if (_recentUsage.contains(itemPath)) {
@@ -728,6 +862,31 @@ class EmojiManagerController extends ChangeNotifier {
           items: entry.value,
           index: index,
         );
+      }
+    }
+    return null;
+  }
+
+  /// 某个分类当前是否包含指定路径的表情 (原生或链接)。
+  bool categoryContains(String category, String itemPath) {
+    return _itemsByCategory[category]?.any((item) => item.path == itemPath) ?? false;
+  }
+
+  /// 查找表情的实体条目 (非链接项, 位于其 home 分类中)。
+  EmojiItem? _findHomeItem(String itemPath) {
+    for (final items in _itemsByCategory.values) {
+      for (final item in items) {
+        if (item.path == itemPath && !item.isLink) {
+          return item;
+        }
+      }
+    }
+    // 找不到非链接条目时退回任意同路径条目。
+    for (final items in _itemsByCategory.values) {
+      for (final item in items) {
+        if (item.path == itemPath) {
+          return item;
+        }
       }
     }
     return null;
