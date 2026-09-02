@@ -50,6 +50,8 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
   EmojiItem? _zoomItem;
   /// 本次按压激活过拖拽/放大模式, 松手后需吞掉随之而来的 tap。
   bool _pressActivatedMode = false;
+  /// 鼠标悬停的图片 (底栏显示其备注/文件名)。
+  EmojiItem? _hoveredItem;
 
   @override
   void initState() {
@@ -122,6 +124,17 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                 Positioned.fill(
                   child: IgnorePointer(
                     child: _buildZoomOverlay(_zoomItem!),
+                  ),
+                ),
+              // 悬停信息底栏: 悬浮于底部, 不占布局空间 (避免挤压网格与
+              // "显示→挡住图片→消失"循环); IgnorePointer 不拦截鼠标。
+              if (_hoveredItem != null)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: IgnorePointer(
+                    child: _buildHoverStatusBar(context),
                   ),
                 ),
             ],
@@ -231,43 +244,44 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     );
   }
 
-  /// 网格卡片: 包裹 MouseRegion (放大时悬停切换大图) 与 Listener
+  /// 网格卡片: 包裹 MouseRegion (悬停底栏信息/放大时切换大图) 与 Listener
   /// (按下/移动事件驱动 拖拽重排 或 放大预览 状态机)。
   Widget _buildGridCard(BuildContext context, EmojiItem item) {
-    final card = Tooltip(
-      message: item.name,
-      excludeFromSemantics: true,
-      child: MouseRegion(
-        cursor:
-            _dragActive ? SystemMouseCursors.move : SystemMouseCursors.click,
-        // 指针按下后 hit test 锁定在起始卡片, move 事件不会派发给其它卡片;
-        // 拖拽换位与放大切换都依赖 MouseTracker 的 onEnter (每次移动重新命中)。
-        onEnter: (_) => _handleItemHover(item),
-        child: Listener(
-          behavior: HitTestBehavior.translucent,
-          onPointerDown: (event) => _handleItemPointerDown(item, event),
-          onPointerMove: (event) => _handleItemPointerMove(item, event.position),
-          child: ImageCard(
-            width: double.infinity,
-            height: double.infinity,
-            imageProvider: _imageProviderFor(item),
-            title: item.name,
-            showText: false,
-            showBottomOverlay: false,
-            selected: _dragActive && _dragPath == item.path,
-            trailingLabel:
-                item.isMissing ? '丢失' : (item.isLink ? '链接' : null),
-            onTap: () {
-              // 拖拽/放大模式后的松手不当作点击, 防止误复制。
-              if (_pressActivatedMode) {
-                _pressActivatedMode = false;
-                return;
-              }
-              _handleEmojiTap(item);
-            },
-            onSecondaryTapUp: (details) =>
-                _showItemMenu(item, details.globalPosition),
-          ),
+    final card = MouseRegion(
+      cursor:
+          _dragActive ? SystemMouseCursors.move : SystemMouseCursors.click,
+      // 指针按下后 hit test 锁定在起始卡片, move 事件不会派发给其它卡片;
+      // 拖拽换位与放大切换都依赖 MouseTracker 的 onEnter (每次移动重新命中)。
+      onEnter: (_) => _handleItemHover(item),
+      onExit: (_) {
+        if (_hoveredItem?.path == item.path) {
+          setState(() => _hoveredItem = null);
+        }
+      },
+      child: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (event) => _handleItemPointerDown(item, event),
+        onPointerMove: (event) => _handleItemPointerMove(item, event.position),
+        child: ImageCard(
+          width: double.infinity,
+          height: double.infinity,
+          imageProvider: _imageProviderFor(item),
+          title: item.name,
+          showText: false,
+          showBottomOverlay: false,
+          selected: _dragActive && _dragPath == item.path,
+          trailingLabel:
+              item.isMissing ? '丢失' : (item.isLink ? '链接' : null),
+          onTap: () {
+            // 拖拽/放大模式后的松手不当作点击, 防止误复制。
+            if (_pressActivatedMode) {
+              _pressActivatedMode = false;
+              return;
+            }
+            _handleEmojiTap(item);
+          },
+          onSecondaryTapUp: (details) =>
+              _showItemMenu(item, details.globalPosition),
         ),
       ),
     );
@@ -301,8 +315,11 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
   }
 
   /// 指针进入某张卡片 (MouseTracker 重新命中后触发):
-  /// 放大模式 → 切换大图; 拖拽模式 → 与目标卡片实时换位。
+  /// 更新底栏悬停信息; 放大模式 → 切换大图; 拖拽模式 → 与目标卡片实时换位。
   void _handleItemHover(EmojiItem item) {
+    if (_hoveredItem?.path != item.path) {
+      setState(() => _hoveredItem = item);
+    }
     if (_zoomActive) {
       if (_zoomItem?.path != item.path) {
         setState(() => _zoomItem = item);
@@ -406,6 +423,35 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// 窗口底栏: 鼠标悬停图片时显示 "([备注]) [文件名]", 无备注只显示文件名。
+  /// 未悬停时不显示。
+  Widget _buildHoverStatusBar(BuildContext context) {
+    final item = _hoveredItem;
+    final remark = item?.remark?.trim() ?? '';
+    final text = item == null
+        ? ''
+        : (remark.isNotEmpty ? '($remark) ${item.name}' : item.name);
+    if (text.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Container(
+      width: double.infinity,
+      height: 28,
+      color: const Color(0xFF151A1F),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      alignment: Alignment.centerLeft,
+      child: Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Colors.white60,
+              fontFamily: 'monospace',
+            ),
       ),
     );
   }
@@ -1230,6 +1276,14 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
         ),
         if (!item.isMissing)
           const PopupMenuItem<String>(
+            value: 'remark',
+            child: ListTile(
+              leading: Icon(Icons.edit_note_outlined),
+              title: Text('设置备注'),
+            ),
+          ),
+        if (!item.isMissing)
+          const PopupMenuItem<String>(
             value: 'addToCategory',
             child: ListTile(
               leading: Icon(Icons.playlist_add),
@@ -1287,6 +1341,8 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
         await _handleEmojiTap(item);
       case 'preview':
         await _showPreview(item);
+      case 'remark':
+        await _showRemarkEditor(item);
       case 'addToCategory':
         await _showAddToCategoryDialog(item);
       case 'removeLink':
@@ -1300,6 +1356,55 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
       case 'delete':
         await _handleDeleteItem(item);
     }
+  }
+
+  /// "设置备注"简易入口: 直接弹出输入框保存, 无需进入预览详情页。
+  Future<void> _showRemarkEditor(EmojiItem item) async {
+    final textController = TextEditingController(text: item.remark ?? '');
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('备注 - ${item.name}'),
+        content: TextField(
+          controller: textController,
+          autofocus: true,
+          minLines: 1,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            hintText: '输入备注 (留空清除)',
+          ),
+          onSubmitted: (_) => Navigator.of(dialogContext).pop(true),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+
+    final text = textController.text;
+    textController.dispose();
+    if (confirmed != true || !mounted) {
+      return;
+    }
+    await _controller.saveRemark(item.path, text);
+    if (!mounted) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(text.trim().isEmpty ? '已清除备注' : '已保存备注'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   /// "添加到分类…" 多选对话框: 把这张图同时加入若干其他分类 (建立链接)。
