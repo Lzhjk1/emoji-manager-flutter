@@ -6,6 +6,8 @@ import 'dart:ui' as ui;
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+// ScrollCacheExtent (scrollCacheExtent 的新类型) 仅由 rendering.dart 导出。
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 import '../app_version.dart';
 import '../controllers/emoji_manager_controller.dart';
@@ -52,7 +54,10 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
   /// 本次按压激活过拖拽/放大模式, 松手后需吞掉随之而来的 tap。
   bool _pressActivatedMode = false;
   /// 鼠标悬停的图片 (底栏显示其备注/文件名)。
-  EmojiItem? _hoveredItem;
+  /// 用 ValueNotifier 而非页面字段: 滚动时鼠标不动、卡片在动, 每滑过一张卡
+  /// 都触发 onEnter, 若走 setState 会整页重建所有可见卡片造成滚动卡顿;
+  /// 改为只通知底栏的 ValueListenableBuilder 局部重建。
+  final ValueNotifier<EmojiItem?> _hoveredItem = ValueNotifier(null);
 
   @override
   void initState() {
@@ -62,6 +67,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
 
   @override
   void dispose() {
+    _hoveredItem.dispose();
     _zoomActivationTimer?.cancel();
     _controller.dispose();
     _searchController.dispose();
@@ -129,15 +135,19 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                 ),
               // 悬停信息底栏: 悬浮于底部, 不占布局空间 (避免挤压网格与
               // "显示→挡住图片→消失"循环); IgnorePointer 不拦截鼠标。
-              if (_hoveredItem != null)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: IgnorePointer(
-                    child: _buildHoverStatusBar(context),
+              // ValueListenableBuilder 局部刷新, 滑过卡片不触发整页重建。
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: IgnorePointer(
+                  child: ValueListenableBuilder<EmojiItem?>(
+                    valueListenable: _hoveredItem,
+                    builder: (context, hovered, _) =>
+                        _buildHoverStatusBar(context, hovered),
                   ),
                 ),
+              ),
             ],
           ),
         );
@@ -221,6 +231,11 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                     child: _controller.visibleItems.isEmpty
                         ? _buildEmptyCategoryState()
                         : GridView.builder(
+                            // 视口外预构建 600px (约 6-8 行), 新卡片滑入前就
+                            // 完成 build 与缩略图解码, 掩盖快速滚动时的解码
+                            // 延迟; 对应参考项目 IntersectionObserver 的
+                            // 600px rootMargin 预载缓冲。
+                            scrollCacheExtent: ScrollCacheExtent.pixels(600),
                             gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
                               maxCrossAxisExtent: _controller.gridThumbnailSize,
                               mainAxisSpacing: 8,
@@ -255,8 +270,8 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
       // 拖拽换位与放大切换都依赖 MouseTracker 的 onEnter (每次移动重新命中)。
       onEnter: (_) => _handleItemHover(item),
       onExit: (_) {
-        if (_hoveredItem?.path == item.path) {
-          setState(() => _hoveredItem = null);
+        if (_hoveredItem.value?.path == item.path) {
+          _hoveredItem.value = null;
         }
       },
       child: Listener(
@@ -318,8 +333,8 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
   /// 指针进入某张卡片 (MouseTracker 重新命中后触发):
   /// 更新底栏悬停信息; 放大模式 → 切换大图; 拖拽模式 → 与目标卡片实时换位。
   void _handleItemHover(EmojiItem item) {
-    if (_hoveredItem?.path != item.path) {
-      setState(() => _hoveredItem = item);
+    if (_hoveredItem.value?.path != item.path) {
+      _hoveredItem.value = item;
     }
     if (_zoomActive) {
       if (_zoomItem?.path != item.path) {
@@ -444,8 +459,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
 
   /// 窗口底栏: 鼠标悬停图片时显示 "([备注]) [文件名]", 无备注只显示文件名。
   /// 未悬停时不显示。
-  Widget _buildHoverStatusBar(BuildContext context) {
-    final item = _hoveredItem;
+  Widget _buildHoverStatusBar(BuildContext context, EmojiItem? item) {
     final remark = item?.remark?.trim() ?? '';
     final text = item == null
         ? ''
