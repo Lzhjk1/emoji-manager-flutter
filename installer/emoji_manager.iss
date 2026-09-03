@@ -2,7 +2,7 @@
 ; 编译方式: ISCC.exe installer\emoji_manager.iss (在项目根目录执行)
 
 #define MyAppName "Emoji Manager"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "0.0.3-rc2"
 #define MyAppPublisher "Roasal"
 #define MyAppExeName "emoji_manager_flutter.exe"
 #define MyReleaseDir "..\build\windows\x64\runner\Release"
@@ -35,6 +35,19 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"
 
 [Files]
 Source: "{#MyReleaseDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Code]
+// 安装前结束正在运行的旧版本进程，避免自动卸载旧版时失败或要求重启。
+// 同 AppId 的情况下，Inno Setup 会在“准备安装”阶段自动静默卸载旧版本。
+function InitializeSetup(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Exec(ExpandConstant('{cmd}'),
+    '/C taskkill /IM "{#MyAppExeName}" /F /T',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Result := True;
+end;
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

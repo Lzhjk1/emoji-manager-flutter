@@ -7,6 +7,7 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../app_version.dart';
 import '../controllers/emoji_manager_controller.dart';
 import '../image_card.dart';
 import '../models/close_button_behavior.dart';
@@ -895,6 +896,12 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                         Text(
                           '设置',
                           style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '版本 $appVersion',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: Colors.white38),
                         ),
                         const SizedBox(height: 20),
                         Text(
