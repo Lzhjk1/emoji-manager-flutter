@@ -20,6 +20,7 @@ class EmojiSettingsService {
   static const _hotkeyEnabledKey = 'hotkey_enabled';
   static const _hotkeyModifiersKey = 'hotkey_modifiers';
   static const _hotkeyKeyCodeKey = 'hotkey_key_code';
+  static const _showCategoryImagesKey = 'show_category_images';
 
   Future<String?> loadRootPath() async {
     final prefs = await SharedPreferences.getInstance();
@@ -134,5 +135,16 @@ class EmojiSettingsService {
   Future<void> saveHotkeyKeyCode(int keyCode) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_hotkeyKeyCodeKey, keyCode);
+  }
+
+  /// 分类卡片是否显示封面图, 默认显示。
+  Future<bool> loadShowCategoryImages() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_showCategoryImagesKey) ?? true;
+  }
+
+  Future<void> saveShowCategoryImages(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_showCategoryImagesKey, value);
   }
 }

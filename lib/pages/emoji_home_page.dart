@@ -42,6 +42,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
   // ---- 按压手势状态机: 按下直接拖动 = 重排序; 按住不动稍久 = 放大预览。----
   /// 放大预览触发延时 (按住基本不动)。
   static const _zoomActivationDelay = Duration(milliseconds: 200);
+
   /// 判定"开始拖动"的位移阈值 (逻辑像素), 超过即进入拖拽并取消放大。
   static const _dragStartSlop = 8.0;
 
@@ -51,8 +52,10 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
   Offset? _pressStartPosition;
   String? _dragPath;
   EmojiItem? _zoomItem;
+
   /// 本次按压激活过拖拽/放大模式, 松手后需吞掉随之而来的 tap。
   bool _pressActivatedMode = false;
+
   /// 鼠标悬停的图片 (底栏显示其备注/文件名)。
   /// 用 ValueNotifier 而非页面字段: 滚动时鼠标不动、卡片在动, 每滑过一张卡
   /// 都触发 onEnter, 若走 setState 会整页重建所有可见卡片造成滚动卡顿;
@@ -99,12 +102,8 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                             color: const Color(0xFF151A1F),
                             child: Text(
                               _controller.loadingMessage!,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodySmall
-                                  ?.copyWith(
-                                    color: Colors.white70,
-                                  ),
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: Colors.white70),
                             ),
                           ),
                       ],
@@ -129,9 +128,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                 ),
               if (_zoomActive && _zoomItem != null)
                 Positioned.fill(
-                  child: IgnorePointer(
-                    child: _buildZoomOverlay(_zoomItem!),
-                  ),
+                  child: IgnorePointer(child: _buildZoomOverlay(_zoomItem!)),
                 ),
               // 悬停信息底栏: 悬浮于底部, 不占布局空间 (避免挤压网格与
               // "显示→挡住图片→消失"循环); IgnorePointer 不拦截鼠标。
@@ -172,9 +169,9 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
               const SizedBox(height: 16),
               Text(
                 _controller.loadingMessage!,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Colors.white70,
-                    ),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
               ),
             ],
           ],
@@ -202,9 +199,9 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
             padding: const EdgeInsets.only(bottom: 12),
             child: Text(
               _controller.loadingMessage!,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Colors.white60,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: Colors.white60),
             ),
           ),
         Expanded(
@@ -236,18 +233,20 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                             // 延迟; 对应参考项目 IntersectionObserver 的
                             // 600px rootMargin 预载缓冲。
                             scrollCacheExtent: ScrollCacheExtent.pixels(600),
-                            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                              maxCrossAxisExtent: _controller.gridThumbnailSize,
-                              mainAxisSpacing: 8,
-                              crossAxisSpacing: 8,
-                              childAspectRatio: 1.0,
-                            ),
-                            itemCount: _controller.visibleItems.length,
-                            itemBuilder: (context, index) =>
-                                _buildGridCard(
-                                  context,
-                                  _controller.visibleItems[index],
+                            physics: const _GridScrollPhysics(),
+                            gridDelegate:
+                                SliverGridDelegateWithMaxCrossAxisExtent(
+                                  maxCrossAxisExtent:
+                                      _controller.gridThumbnailSize,
+                                  mainAxisSpacing: 8,
+                                  crossAxisSpacing: 8,
+                                  childAspectRatio: 1.0,
                                 ),
+                            itemCount: _controller.visibleItems.length,
+                            itemBuilder: (context, index) => _buildGridCard(
+                              context,
+                              _controller.visibleItems[index],
+                            ),
                           ),
                   ),
                 ),
@@ -264,8 +263,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
   /// (按下/移动事件驱动 拖拽重排 或 放大预览 状态机)。
   Widget _buildGridCard(BuildContext context, EmojiItem item) {
     final card = MouseRegion(
-      cursor:
-          _dragActive ? SystemMouseCursors.move : SystemMouseCursors.click,
+      cursor: _dragActive ? SystemMouseCursors.move : SystemMouseCursors.click,
       // 指针按下后 hit test 锁定在起始卡片, move 事件不会派发给其它卡片;
       // 拖拽换位与放大切换都依赖 MouseTracker 的 onEnter (每次移动重新命中)。
       onEnter: (_) => _handleItemHover(item),
@@ -288,8 +286,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
           // 网格卡片多, 关闭模糊阴影降低每帧光栅成本 (保留描边)。
           showShadow: false,
           selected: _dragActive && _dragPath == item.path,
-          trailingLabel:
-              item.isMissing ? '丢失' : (item.isLink ? '链接' : null),
+          trailingLabel: item.isMissing ? '丢失' : (item.isLink ? '链接' : null),
           onTap: () {
             // 拖拽/放大模式后的松手不当作点击, 防止误复制。
             if (_pressActivatedMode) {
@@ -486,9 +483,9 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: Colors.white60,
-              fontFamily: 'monospace',
-            ),
+          color: Colors.white60,
+          fontFamily: 'monospace',
+        ),
       ),
     );
   }
@@ -497,7 +494,9 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
   /// 按当前视图是否可接收显示不同颜色与文案。
   Widget _buildDropOverlay(BuildContext context) {
     final accepted = _controller.canAcceptDroppedImages;
-    final color = accepted ? Theme.of(context).colorScheme.primary : Colors.orange;
+    final color = accepted
+        ? Theme.of(context).colorScheme.primary
+        : Colors.orange;
     return Positioned.fill(
       child: IgnorePointer(
         child: ClipRRect(
@@ -535,9 +534,9 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                           ? '松开以添加到当前分类「${_controller.selectedCategory ?? ''}」'
                           : '「最近使用」和「全部」视图不支持拖入添加',
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w600,
-                          ),
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                 ],
@@ -618,9 +617,9 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                 const SizedBox(height: 12),
                 Text(
                   '参考 Android 版规则：一级子目录作为分类，子目录内部递归扫描图片；根目录直接放置的图片归入“未分类”。',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Colors.white70,
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
                 ),
                 const SizedBox(height: 20),
                 Wrap(
@@ -661,6 +660,19 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
               onPressed: _controller.rootPath == null ? null : _handleRescan,
               icon: const Icon(Icons.refresh),
             ),
+            IconButton(
+              tooltip: _controller.showCategoryImages
+                  ? '隐藏分类封面图'
+                  : '显示分类封面图',
+              isSelected: _controller.showCategoryImages,
+              onPressed: () {
+                _controller.setShowCategoryImages(
+                  !_controller.showCategoryImages,
+                );
+              },
+              icon: const Icon(Icons.hide_image_outlined),
+              selectedIcon: const Icon(Icons.image_outlined),
+            ),
             if (Platform.isWindows)
               IconButton(
                 tooltip: _controller.alwaysOnTop ? '取消置顶' : '始终置顶',
@@ -686,7 +698,10 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                     .toList();
               },
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -720,13 +735,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                _buildStatsWrap(),
-                const Spacer(),
-                actions,
-              ],
-            ),
+            Row(children: [_buildStatsWrap(), const Spacer(), actions]),
             const SizedBox(height: 12),
             _buildSearchField(),
           ],
@@ -774,32 +783,39 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
   }
 
   /// 分类栏: 横向滚动的分类卡片列表, 前两个固定为"全部"与"最近使用"。
+  /// 关闭封面图开关时全部回退为占位图标。
   Widget _buildCategoryBar(BuildContext context) {
+    final showImages = _controller.showCategoryImages;
     final entries = <_CategoryEntry>[
       _CategoryEntry(
         category: EmojiManagerController.allCategoryView,
         label: '全部',
-        imageProvider:
-            _categoryImageProvider(_controller.firstItemOverall),
+        imageProvider: showImages
+            ? _categoryImageProvider(_controller.firstItemOverall)
+            : null,
         iconData: Icons.grid_view_outlined,
       ),
       _CategoryEntry(
         category: EmojiManagerController.recentCategoryView,
         label: '最近使用',
-        imageProvider:
-            _categoryImageProvider(_controller.recentViewThumbnail),
+        imageProvider: showImages
+            ? _categoryImageProvider(_controller.recentViewThumbnail)
+            : null,
         iconData: Icons.history,
       ),
       for (final category in _controller.categories)
         _CategoryEntry(
           category: category,
           label: category,
-          imageProvider:
-              _categoryImageProvider(_controller.categoryThumbnails[category]),
+          imageProvider: showImages
+              ? _categoryImageProvider(
+                  _controller.categoryThumbnails[category],
+                )
+              : null,
         ),
     ];
 
-    // 分类框最外层
+    // 分类框最外层 (关闭封面图时收窄为一行文字高度)
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
@@ -808,7 +824,8 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
         border: Border.all(color: Colors.white10),
       ),
       child: SizedBox(
-        height: 118,
+        // 底部预留滚动条厚度, 避免滚动条覆盖在标签上
+        height: showImages ? 118 : 44,
         child: Scrollbar(
           controller: _categoryScrollController,
           notificationPredicate: (notification) => notification.depth == 0,
@@ -817,8 +834,9 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
             child: ListView.separated(
               controller: _categoryScrollController,
               scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.only(bottom: 16),
               itemCount: entries.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 12),
+              separatorBuilder: (_, _) => const SizedBox(width: 8),
               itemBuilder: (context, index) {
                 final entry = entries[index];
                 final isSelected =
@@ -826,6 +844,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
 
                 return _CategoryCard(
                   category: entry.label,
+                  showImage: showImages,
                   imageProvider: entry.imageProvider,
                   iconData: entry.iconData,
                   selected: isSelected,
@@ -942,9 +961,8 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                         const SizedBox(height: 20),
                         Text(
                           '当前表情包目录',
-                          style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                                color: Colors.white60,
-                              ),
+                          style: Theme.of(context).textTheme.labelLarge
+                              ?.copyWith(color: Colors.white60),
                         ),
                         const SizedBox(height: 8),
                         SelectableText(
@@ -997,7 +1015,9 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                           },
                           onSelectionChanged: (selection) {
                             if (selection.isNotEmpty) {
-                              _controller.setCloseButtonBehavior(selection.first);
+                              _controller.setCloseButtonBehavior(
+                                selection.first,
+                              );
                             }
                           },
                         ),
@@ -1024,19 +1044,15 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                         const SizedBox(height: 8),
                         FilledButton.tonalIcon(
                           onPressed: () async {
-                            await _controller
-                                .setAutoPasteProcessesFromText(
+                            await _controller.setAutoPasteProcessesFromText(
                               autoPasteController.text,
                             );
                             if (!context.mounted) {
                               return;
                             }
-                            ScaffoldMessenger.of(context)
-                                .hideCurrentSnackBar();
+                            ScaffoldMessenger.of(context).hideCurrentSnackBar();
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('已更新自动粘贴应用列表'),
-                              ),
+                              const SnackBar(content: Text('已更新自动粘贴应用列表')),
                             );
                           },
                           icon: const Icon(Icons.bookmark_added_outlined),
@@ -1070,27 +1086,27 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                           crossAxisAlignment: WrapCrossAlignment.center,
                           children: [
                             for (final entry in const {
-                              'Ctrl': WindowControlService.hotkeyModifierControl,
+                              'Ctrl':
+                                  WindowControlService.hotkeyModifierControl,
                               'Shift': WindowControlService.hotkeyModifierShift,
                               'Alt': WindowControlService.hotkeyModifierAlt,
                               'Win': WindowControlService.hotkeyModifierWin,
                             }.entries)
                               FilterChip(
                                 label: Text(entry.key),
-                                selected: (_controller.hotkeyModifiers &
+                                selected:
+                                    (_controller.hotkeyModifiers &
                                         entry.value) !=
                                     0,
                                 onSelected: (selected) {
-                                  var modifiers =
-                                      _controller.hotkeyModifiers;
+                                  var modifiers = _controller.hotkeyModifiers;
                                   modifiers = selected
                                       ? (modifiers | entry.value)
                                       : (modifiers & ~entry.value);
                                   // 全部修饰键都被取消时强制保留 Ctrl, 保证热键有效。
                                   if ((modifiers & 0xF) == 0) {
-                                    modifiers |=
-                                        WindowControlService
-                                            .hotkeyModifierControl;
+                                    modifiers |= WindowControlService
+                                        .hotkeyModifierControl;
                                   }
                                   _controller.setHotkeyBinding(
                                     modifiers: modifiers,
@@ -1100,8 +1116,10 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                               ),
                             const SizedBox(width: 4),
                             DropdownButton<int>(
-                              value: _hotkeyKeyCodeItems
-                                      .contains(_controller.hotkeyKeyCode)
+                              value:
+                                  _hotkeyKeyCodeItems.contains(
+                                    _controller.hotkeyKeyCode,
+                                  )
                                   ? _controller.hotkeyKeyCode
                                   : 0x56,
                               items: [
@@ -1140,9 +1158,8 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                         const SizedBox(height: 8),
                         Text(
                           '程序会自动忽略 `.sync` 和 `${EmojiThumbnailService.cacheDirectoryName}`。',
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                color: Colors.white54,
-                              ),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: Colors.white54),
                         ),
                         const SizedBox(height: 12),
                         FilledButton.tonalIcon(
@@ -1155,9 +1172,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                             }
                             ScaffoldMessenger.of(context).hideCurrentSnackBar();
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('已更新扫描例外并重新扫描'),
-                              ),
+                              const SnackBar(content: Text('已更新扫描例外并重新扫描')),
                             );
                           },
                           icon: const Icon(Icons.rule_folder_outlined),
@@ -1175,9 +1190,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                             Text(
                               '${_controller.gridThumbnailSize.round()}',
                               style: Theme.of(context).textTheme.bodyMedium
-                                  ?.copyWith(
-                                    color: Colors.white70,
-                                  ),
+                                  ?.copyWith(color: Colors.white70),
                             ),
                           ],
                         ),
@@ -1194,9 +1207,8 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                         ),
                         Text(
                           '桌面端支持 Ctrl + 鼠标滚轮实时调节缩略图大小。',
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                color: Colors.white54,
-                              ),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: Colors.white54),
                         ),
                       ],
                     ),
@@ -1227,8 +1239,8 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
       return;
     }
 
-    final nextValue = _controller.gridThumbnailSize +
-        (event.scrollDelta.dy > 0 ? -12 : 12);
+    final nextValue =
+        _controller.gridThumbnailSize + (event.scrollDelta.dy > 0 ? -12 : 12);
     _controller.setGridThumbnailSize(nextValue);
   }
 
@@ -1252,12 +1264,13 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
   /// 两条路径均会记录使用次数。
   Future<void> _handleEmojiTap(EmojiItem item) async {
     if (Platform.isWindows && _controller.autoPasteProcesses.isNotEmpty) {
-      final processName = await WindowControlService
-          .getPreviousForegroundProcessName();
+      final processName =
+          await WindowControlService.getPreviousForegroundProcessName();
       if (processName != null &&
           _controller.matchesAutoPasteTarget(processName)) {
-        final handled =
-            await PlatformEmojiClipboardService.copyImageAndPaste(item.path);
+        final handled = await PlatformEmojiClipboardService.copyImageAndPaste(
+          item.path,
+        );
         if (!mounted) {
           return;
         }
@@ -1281,9 +1294,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     messenger.hideCurrentSnackBar();
     messenger.showSnackBar(
       SnackBar(
-        content: Text(
-          copied ? '已复制文件到剪贴板' : '复制失败：无法写入文件到剪贴板',
-        ),
+        content: Text(copied ? '已复制文件到剪贴板' : '复制失败：无法写入文件到剪贴板'),
         duration: const Duration(seconds: 2),
       ),
     );
@@ -1346,8 +1357,10 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
             value: 'removeMissingLink',
             child: ListTile(
               leading: Icon(Icons.link_off, color: Colors.orangeAccent),
-              title: Text('移除失效链接',
-                  style: TextStyle(color: Colors.orangeAccent)),
+              title: Text(
+                '移除失效链接',
+                style: TextStyle(color: Colors.orangeAccent),
+              ),
             ),
           ),
         const PopupMenuItem<String>(
@@ -1370,8 +1383,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
             value: 'delete',
             child: ListTile(
               leading: Icon(Icons.delete_outline, color: Colors.redAccent),
-              title: Text('删除这张图片',
-                  style: TextStyle(color: Colors.redAccent)),
+              title: Text('删除这张图片', style: TextStyle(color: Colors.redAccent)),
             ),
           ),
       ],
@@ -1413,9 +1425,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
           autofocus: true,
           minLines: 1,
           maxLines: 3,
-          decoration: const InputDecoration(
-            hintText: '输入备注 (留空清除)',
-          ),
+          decoration: const InputDecoration(hintText: '输入备注 (留空清除)'),
           onSubmitted: (_) => Navigator.of(dialogContext).pop(true),
         ),
         actions: [
@@ -1573,9 +1583,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('删除图片'),
-        content: Text(
-          '确定要删除「${item.name}」吗？\n磁盘上的图片文件会被一并删除，无法恢复。',
-        ),
+        content: Text('确定要删除「${item.name}」吗？\n磁盘上的图片文件会被一并删除，无法恢复。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
@@ -1600,9 +1608,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     messenger.hideCurrentSnackBar();
     messenger.showSnackBar(
       SnackBar(
-        content: Text(
-          deleted ? '已删除 ${item.name}' : '删除失败：文件不存在或无法删除',
-        ),
+        content: Text(deleted ? '已删除 ${item.name}' : '删除失败：文件不存在或无法删除'),
         duration: const Duration(seconds: 2),
       ),
     );
@@ -1614,16 +1620,14 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     if (!File(item.path).existsSync()) {
       messenger.hideCurrentSnackBar();
       messenger.showSnackBar(
-        const SnackBar(
-          content: Text('文件已不存在'),
-          duration: Duration(seconds: 2),
-        ),
+        const SnackBar(content: Text('文件已不存在'), duration: Duration(seconds: 2)),
       );
       return;
     }
 
-    final revealed =
-        await PlatformEmojiClipboardService.revealInExplorer(item.path);
+    final revealed = await PlatformEmojiClipboardService.revealInExplorer(
+      item.path,
+    );
     if (revealed || !mounted) {
       return;
     }
@@ -1653,9 +1657,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     messenger.hideCurrentSnackBar();
     messenger.showSnackBar(
       SnackBar(
-        content: Text(
-          refreshed ? '已刷新缩略图' : '刷新失败：无法重新生成缩略图',
-        ),
+        content: Text(refreshed ? '已刷新缩略图' : '刷新失败：无法重新生成缩略图'),
         duration: const Duration(seconds: 2),
       ),
     );
@@ -1706,7 +1708,10 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
       return null;
     }
     final dpr = MediaQuery.devicePixelRatioOf(context);
-    final targetSize = math.min((96 * dpr).round(), EmojiThumbnailService.thumbnailMaxSize);
+    final targetSize = math.min(
+      (96 * dpr).round(),
+      EmojiThumbnailService.thumbnailMaxSize,
+    );
     return ResizeImage(
       FileImage(File(thumbnailPath)),
       width: targetSize,
@@ -1759,10 +1764,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
 
 /// 链接自愈/丢失悬浮提示: 8 秒后自动消失, 可手动关闭。
 class _HealReportBanner extends StatefulWidget {
-  const _HealReportBanner({
-    required this.report,
-    required this.onDismiss,
-  });
+  const _HealReportBanner({required this.report, required this.onDismiss});
 
   final LinkHealReport report;
   final VoidCallback onDismiss;
@@ -1794,8 +1796,7 @@ class _HealReportBannerState extends State<_HealReportBanner> {
   Widget build(BuildContext context) {
     final report = widget.report;
     final lines = <String>[
-      for (final heal in report.healed)
-        '已自动恢复: ${heal.key} → ${heal.value}',
+      for (final heal in report.healed) '已自动恢复: ${heal.key} → ${heal.value}',
       for (final path in report.missing) '无法恢复: $path',
     ];
 
@@ -1837,7 +1838,7 @@ class _HealReportBannerState extends State<_HealReportBanner> {
                     report.missing.isEmpty
                         ? '检测到 ${report.healed.length} 个失效链接，已全部自动恢复'
                         : '检测到失效链接：恢复 ${report.healed.length} 个，'
-                            '无法恢复 ${report.missing.length} 个',
+                              '无法恢复 ${report.missing.length} 个',
                     style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
@@ -1874,10 +1875,7 @@ class _HealReportBannerState extends State<_HealReportBanner> {
 
 /// 顶栏统计 chip (标签 + 数值)。
 class _StatChip extends StatelessWidget {
-  const _StatChip({
-    required this.label,
-    required this.value,
-  });
+  const _StatChip({required this.label, required this.value});
 
   final String label;
   final String value;
@@ -1897,17 +1895,17 @@ class _StatChip extends StatelessWidget {
               TextSpan(
                 text: '$label  ',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Colors.white60,
-                      fontSize: 12,
-                    ),
+                  color: Colors.white60,
+                  fontSize: 12,
+                ),
               ),
               TextSpan(
                 text: value,
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 14,
-                    ),
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                ),
               ),
             ],
           ),
@@ -1933,9 +1931,11 @@ class _CategoryEntry {
 }
 
 /// 单个分类卡片: 封面图 (Cover 裁切) + 分类名, 选中时高亮描边。
+/// 关闭封面图时退化为文字胶囊: 高度一行文字, 宽度随文字自适应。
 class _CategoryCard extends StatelessWidget {
   const _CategoryCard({
     required this.category,
+    required this.showImage,
     required this.imageProvider,
     required this.selected,
     required this.onTap,
@@ -1943,6 +1943,7 @@ class _CategoryCard extends StatelessWidget {
   });
 
   final String category;
+  final bool showImage;
   final ImageProvider<Object>? imageProvider;
   final IconData? iconData;
   final bool selected;
@@ -1952,6 +1953,38 @@ class _CategoryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final placeholderIcon = iconData ?? Icons.folder_copy_outlined;
+    final label = Text(
+      category,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: theme.textTheme.labelLarge?.copyWith(
+        color: selected ? theme.colorScheme.primary : Colors.white,
+        fontWeight: FontWeight.w700,
+      ),
+    );
+
+    if (!showImage) {
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: onTap,
+          child: Ink(
+            height: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1D21),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: selected ? theme.colorScheme.primary : Colors.white12,
+                width: selected ? 1.6 : 1,
+              ),
+            ),
+            child: Center(child: label),
+          ),
+        ),
+      );
+    }
 
     return Material(
       color: Colors.transparent,
@@ -2005,20 +2038,32 @@ class _CategoryCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 8),
-                Text(
-                  category,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.labelLarge?.copyWith(
-                    color: selected ? theme.colorScheme.primary : Colors.white,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
+                label,
               ],
             ),
           ),
         ),
       ),
     );
+  }
+}
+
+/// Ctrl 按下时拒绝接受用户滚动偏移: Scrollable 在处理每个滚轮事件前都会询问
+/// shouldAcceptUserOffset, 按住 Ctrl 时返回 false 即不注册滚动回调, 滚轮事件
+/// 便只由外层 Listener 处理缩放。每次实时读取键盘状态, 无需追踪按键按下/抬起。
+class _GridScrollPhysics extends ScrollPhysics {
+  const _GridScrollPhysics({super.parent});
+
+  @override
+  _GridScrollPhysics applyTo(ScrollPhysics? ancestor) {
+    return _GridScrollPhysics(parent: buildParent(ancestor));
+  }
+
+  @override
+  bool shouldAcceptUserOffset(ScrollMetrics position) {
+    if (HardwareKeyboard.instance.isControlPressed) {
+      return false;
+    }
+    return super.shouldAcceptUserOffset(position);
   }
 }

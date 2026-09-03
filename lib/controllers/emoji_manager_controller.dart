@@ -56,6 +56,7 @@ class EmojiManagerController extends ChangeNotifier {
   List<String> _recentUsage = [];
   List<String> _autoPasteProcesses = const [];
   bool _hotkeyEnabled = true;
+  bool _showCategoryImages = true;
   int _hotkeyModifiers = WindowControlService.hotkeyModifierControl |
       WindowControlService.hotkeyModifierShift;
   int _hotkeyKeyCode = 0x56; // 'V'
@@ -76,6 +77,7 @@ class EmojiManagerController extends ChangeNotifier {
   List<String> get autoPasteProcesses =>
       List<String>.unmodifiable(_autoPasteProcesses);
   bool get hotkeyEnabled => _hotkeyEnabled;
+  bool get showCategoryImages => _showCategoryImages;
   int get hotkeyModifiers => _hotkeyModifiers;
   int get hotkeyKeyCode => _hotkeyKeyCode;
 
@@ -191,6 +193,7 @@ class EmojiManagerController extends ChangeNotifier {
     _hotkeyEnabled = await _settingsService.loadHotkeyEnabled();
     _hotkeyModifiers = await _settingsService.loadHotkeyModifiers();
     _hotkeyKeyCode = await _settingsService.loadHotkeyKeyCode();
+    _showCategoryImages = await _settingsService.loadShowCategoryImages();
     _rootPath = await _settingsService.loadRootPath();
     await EmojiLogService.instance.startSession(_rootPath);
     await _applyWindowSettings();
@@ -368,6 +371,17 @@ class EmojiManagerController extends ChangeNotifier {
     _alwaysOnTop = value;
     await _settingsService.saveAlwaysOnTop(value);
     await _applyWindowSettings();
+    notifyListeners();
+  }
+
+  /// 切换分类卡片封面图的显示 (关闭时显示占位图标)。
+  Future<void> setShowCategoryImages(bool value) async {
+    if (_showCategoryImages == value) {
+      return;
+    }
+
+    _showCategoryImages = value;
+    await _settingsService.saveShowCategoryImages(value);
     notifyListeners();
   }
 
