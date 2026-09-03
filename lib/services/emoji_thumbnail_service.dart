@@ -1,5 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
@@ -88,10 +90,14 @@ class EmojiThumbnailService {
     try {
       if (needsUpdate) {
         // 重活放在后台 isolate: 解码 + 裁剪 + 编码, 大位图随 isolate 释放。
-        final encoded = await compute(
+        var encoded = await compute(
           _generateThumbnailBytes,
           filePath,
         );
+        // image 包解不开的文件 (如含 RST 重启标记的 JPEG) 用引擎原生解码兜底。
+        // 引擎图像解码器注册表无法在 compute 的后台 isolate 中访问,
+        // 因此兜底解码在主 isolate 执行 (先缩到 256px, 开销很小)。
+        encoded ??= await _generateThumbnailBytesViaEngine(filePath);
         if (encoded == null) {
           return null;
         }
@@ -219,17 +225,46 @@ class ThumbnailEntry {
   }
 }
 
-/// 在后台 isolate 中读取并解码 [filePath], 居中裁成正方形后缩放到
-/// [EmojiThumbnailService.thumbnailMaxSize] 并编码为 JPEG。
-/// 重型位图缓冲随 isolate 结束释放, 不会膨胀主 isolate 的堆内存。
-Uint8List? _generateThumbnailBytes(String filePath) {
+/// 在后台 isolate 中用 image 包读取并解码 [filePath]。
+/// 无法解码时返回 null, 由调用方走引擎原生解码兜底。
+Future<Uint8List?> _generateThumbnailBytes(String filePath) async {
   try {
     final sourceBytes = File(filePath).readAsBytesSync();
-    final decoded = img.decodeImage(sourceBytes);
+    img.Image? decoded;
+    try {
+      decoded = img.decodeImage(sourceBytes);
+    } catch (_) {
+      // image 包无法识别的格式变体 (如含 RST 重启标记的 JPEG) 会抛异常。
+      decoded = null;
+    }
     if (decoded == null) {
       return null;
     }
+    return _cropAndEncode(decoded);
+  } catch (_) {
+    return null;
+  }
+}
 
+/// 主 isolate 兜底: 用 Flutter 引擎原生解码 (Skia, 兼容 image 包
+/// 不支持的 JPEG 变体), 再复用居中裁剪与 JPEG 编码逻辑。
+Future<Uint8List?> _generateThumbnailBytesViaEngine(String filePath) async {
+  try {
+    final sourceBytes = File(filePath).readAsBytesSync();
+    final decoded = await _decodeWithEngine(sourceBytes);
+    if (decoded == null) {
+      return null;
+    }
+    return _cropAndEncode(decoded);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// 居中裁成正方形并缩放到 [EmojiThumbnailService.thumbnailMaxSize],
+/// 编码为 JPEG。
+Uint8List? _cropAndEncode(img.Image decoded) {
+  try {
     final cropSize = decoded.width < decoded.height
         ? decoded.width
         : decoded.height;
@@ -256,5 +291,57 @@ Uint8List? _generateThumbnailBytes(String filePath) {
     );
   } catch (_) {
     return null;
+  }
+}
+
+/// 回退解码: 用 Flutter 引擎原生解码器处理 image 包不支持的文件
+/// (引擎基于 Skia, 兼容含 RST 重启标记等 JPEG 变体)。
+/// 等比缩放至最长边不超过 [EmojiThumbnailService.thumbnailMaxSize],
+/// 再转回 [img.Image] 以复用居中裁剪与 JPEG 编码逻辑。
+Future<img.Image?> _decodeWithEngine(Uint8List sourceBytes) async {
+  ui.Codec? codec;
+  try {
+    final buffer = await ui.ImmutableBuffer.fromUint8List(sourceBytes);
+    // 注意: instantiateImageCodecWithSize 成功与否都会接管并释放 buffer,
+    // 调用方不得再次 dispose。
+    final maxSize = EmojiThumbnailService.thumbnailMaxSize;
+    try {
+      codec = await ui.instantiateImageCodecWithSize(
+        buffer,
+        getTargetSize: (intrinsicWidth, intrinsicHeight) {
+          final scale =
+              maxSize / math.max(intrinsicWidth, intrinsicHeight);
+          return ui.TargetImageSize(
+            width: (intrinsicWidth * scale).round(),
+            height: (intrinsicHeight * scale).round(),
+          );
+        },
+      );
+    } catch (_) {
+      return null;
+    }
+    final frame = await codec.getNextFrame();
+    final ui.Image image = frame.image;
+    final width = image.width;
+    final height = image.height;
+    final data = await image.toByteData(
+      format: ui.ImageByteFormat.rawStraightRgba,
+    );
+    image.dispose();
+    if (data == null) {
+      return null;
+    }
+    return img.Image.fromBytes(
+      width: width,
+      height: height,
+      bytes: data.buffer,
+      bytesOffset: data.offsetInBytes,
+      numChannels: 4,
+      order: img.ChannelOrder.rgba,
+    );
+  } catch (_) {
+    return null;
+  } finally {
+    codec?.dispose();
   }
 }
