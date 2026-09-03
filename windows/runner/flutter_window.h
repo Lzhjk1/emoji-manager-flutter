@@ -40,6 +40,7 @@ class FlutterWindow : public Win32Window {
                            flutter::MethodResult<flutter::EncodableValue>* result);
   void SetAlwaysOnTop(bool enabled);
   void SetCloseToTray(bool enabled);
+  void HideWindow();
   void MinimizeToTray();
   void RestoreFromTray();
   void ToggleWindowVisibility();

@@ -589,13 +589,24 @@ void FlutterWindow::SetCloseToTray(bool enabled) {
   close_to_tray_ = enabled;
 }
 
+void FlutterWindow::HideWindow() {
+  if (GetHandle() == nullptr) {
+    return;
+  }
+
+  // 先最小化再隐藏: 引擎收到 WM_SIZE(SIZE_MINIMIZED) 才会暂停渲染与动画,
+  // 仅 SW_HIDE 时引擎保持 vsync 循环, GIF 等动图持续解码导致 CPU 占用偏高。
+  ShowWindow(GetHandle(), SW_MINIMIZE);
+  ShowWindow(GetHandle(), SW_HIDE);
+}
+
 void FlutterWindow::MinimizeToTray() {
   if (GetHandle() == nullptr) {
     return;
   }
 
   EnsureTrayIcon();
-  ShowWindow(GetHandle(), SW_HIDE);
+  HideWindow();
 }
 
 void FlutterWindow::RestoreFromTray() {
@@ -613,7 +624,7 @@ void FlutterWindow::ToggleWindowVisibility() {
   }
 
   if (IsWindowVisible(GetHandle())) {
-    ShowWindow(GetHandle(), SW_HIDE);
+    HideWindow();
     return;
   }
 
@@ -875,7 +886,8 @@ bool FlutterWindow::PasteToPreviousWindow() {
     preferred = nullptr;
   }
 
-  ShowWindow(GetHandle(), SW_HIDE);
+  // 隐藏本窗口让焦点交还上一个应用; 同时暂停渲染 (见 HideWindow 注释)。
+  HideWindow();
 
   // Wait for the system to activate a window on its own. Shell windows
   // (taskbar/desktop) are ignored: they take focus when this window was
