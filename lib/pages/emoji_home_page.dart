@@ -285,6 +285,8 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
           title: item.name,
           showText: false,
           showBottomOverlay: false,
+          // 网格卡片多, 关闭模糊阴影降低每帧光栅成本 (保留描边)。
+          showShadow: false,
           selected: _dragActive && _dragPath == item.path,
           trailingLabel:
               item.isMissing ? '丢失' : (item.isLink ? '链接' : null),
@@ -317,6 +319,11 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     _zoomItem = null;
     _dragPath = null;
     _pressActivatedMode = false;
+    // 按下即预热预览图: 200ms 按压窗口足够完成"读盘+按窗口尺寸解码",
+    // 放大遮罩打开时直接命中图片缓存, 消除打开瞬间的解码停顿。
+    if (!item.isMissing) {
+      precacheImage(_previewImageProvider(item), context);
+    }
     _zoomActivationTimer = Timer(_zoomActivationDelay, () {
       _zoomActivationTimer = null;
       if (_pressStartPosition == null || _dragActive || !mounted) {
@@ -397,6 +404,21 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
     }
   }
 
+  /// 预览图 provider: 按窗口尺寸 (乘 devicePixelRatio) 限流解码, 避免全尺寸
+  /// 原图解码导致内存暴涨; fit 策略保证等比缩放, 与 BoxFit.contain 一致。
+  /// 用窗口尺寸而非覆盖层 LayoutBuilder 约束, cache key 才稳定,
+  /// 按下时的 precacheImage 预热才能与遮罩打开时的解析命中同一缓存。
+  ImageProvider<Object> _previewImageProvider(EmojiItem item) {
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final size = MediaQuery.sizeOf(context);
+    return ResizeImage(
+      FileImage(File(item.path)),
+      width: (size.width * dpr).round().clamp(256, 4096),
+      height: (size.height * dpr).round().clamp(256, 4096),
+      policy: ResizeImagePolicy.fit,
+    );
+  }
+
   /// 放大预览遮罩: 原始比例接近全窗口显示 + 底部名称胶囊;
   /// IgnorePointer 保证鼠标仍可悬停到其它卡片切换大图。
   Widget _buildZoomOverlay(EmojiItem item) {
@@ -413,24 +435,10 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                       size: 120,
                       color: Colors.white38,
                     )
-                  : LayoutBuilder(
-                      builder: (context, constraints) {
-                        // 按覆盖层实际显示尺寸 (乘 devicePixelRatio) 限制解码
-                        // 分辨率, 避免全尺寸原图解码导致内存暴涨; fit 策略
-                        // 保证等比缩放, 与 BoxFit.contain 显示效果一致。
-                        final dpr = MediaQuery.devicePixelRatioOf(context);
-                        final provider = ResizeImage(
-                          FileImage(File(item.path)),
-                          width: (constraints.maxWidth * dpr).round(),
-                          height: (constraints.maxHeight * dpr).round(),
-                          policy: ResizeImagePolicy.fit,
-                        );
-                        return Image(
-                          image: provider,
-                          fit: BoxFit.contain,
-                          filterQuality: FilterQuality.medium,
-                        );
-                      },
+                  : Image(
+                      image: _previewImageProvider(item),
+                      fit: BoxFit.contain,
+                      filterQuality: FilterQuality.medium,
                     ),
             ),
           ),

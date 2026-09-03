@@ -17,6 +17,7 @@ class ImageCard extends StatelessWidget {
     this.trailingLabel,
     this.showText = true,
     this.showBottomOverlay = true,
+    this.showShadow = true,
     this.onTap,
     this.onLongPress,
     this.onSecondaryTapUp,
@@ -31,6 +32,10 @@ class ImageCard extends StatelessWidget {
   final String? trailingLabel;
   final bool showText;
   final bool showBottomOverlay;
+  /// 是否绘制投影阴影。模糊阴影在 Skia 光栅线程上逐帧重绘, 同屏卡片很多时
+  /// 是掉帧主因 (Chromium 会把 shadow 光栅进 tile 复用, Flutter 每帧付钱);
+  /// 小尺寸网格卡片应关闭, 仅保留描边。
+  final bool showShadow;
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
   final void Function(TapUpDetails details)? onSecondaryTapUp;
@@ -55,13 +60,15 @@ class ImageCard extends StatelessWidget {
               color: selected ? theme.colorScheme.primary : Colors.white10,
               width: selected ? 1.5 : 1,
             ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.18),
-                blurRadius: 18,
-                offset: const Offset(0, 10),
-              ),
-            ],
+            boxShadow: showShadow
+                ? [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.18),
+                      blurRadius: 18,
+                      offset: const Offset(0, 10),
+                    ),
+                  ]
+                : null,
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(5),
