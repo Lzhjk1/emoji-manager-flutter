@@ -759,8 +759,10 @@ bool FlutterWindow::SetHotkey(bool enabled, UINT modifiers, UINT key_code) {
 }
 
 // 把 RGBA 像素数据封装为 CF_DIB (32bpp, 自底向上, BGRA) 写入剪贴板。
-// 使用 CF_DIB 而非 PNG, 因为 QQ 等聊天软件粘贴截图时读取的就是该格式,
-// 文件体积也更小; paste 为 true 时随后向之前的前台窗口发送 Ctrl+V。
+// 保留的位图复制入口: 自动粘贴现已统一走 CopyFileToClipboard (原文件粘贴,
+// 保留动画与压缩), 位图方式供日后遇到更适合它的软件时使用; QQ 等软件
+// 粘贴位图会重新编码成较大的 PNG。paste 为 true 时随后向之前的前台窗口
+// 发送 Ctrl+V。
 bool FlutterWindow::CopyImageToClipboard(int width, int height,
                                          const std::vector<uint8_t>& rgba,
                                          bool paste, bool* pasted) {

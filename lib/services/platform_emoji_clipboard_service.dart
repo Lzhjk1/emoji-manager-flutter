@@ -13,10 +13,6 @@ class PlatformEmojiClipboardService {
     'emoji_manager/platform_clipboard',
   );
 
-  /// 以"文件"形式粘贴而非位图的扩展名:
-  /// GIF 保留动画, JPEG 保留压缩 (转位图粘贴会被接收方重新编码成大得多的 PNG)。
-  static const _pasteAsFileExtensions = {'gif', 'jpg', 'jpeg'};
-
   /// 把文件复制到剪贴板; 非 Windows 平台退化为复制路径文本。
   static Future<bool> copyFile(String filePath) async {
     if (!File(filePath).existsSync()) {
@@ -38,10 +34,10 @@ class PlatformEmojiClipboardService {
 
   /// 复制图片到剪贴板并触发自动粘贴 (唤起流程用)。
   ///
-  /// 普通图片解码后以 CF_DIB 位图格式写入剪贴板 (QQ 等聊天软件
-  /// 截图粘贴即为此格式), 可选择隐藏本窗口并向之前的前台应用发送 Ctrl+V。
-  /// 不应被重新编码的格式 (动图 GIF 会丢帧; JPEG 会被转成超大 PNG)
-  /// 改为以文件形式粘贴, 保留原始数据。
+  /// 统一以原文件形式 (CF_HDROP) 复制并粘贴: 接收方拿到原始数据,
+  /// 保留 GIF 动画与 JPEG/WebP 压缩; 转位图粘贴会被 QQ 等软件
+  /// 重新编码成大得多的 PNG。位图复制入口保留在
+  /// [copyImageAsBitmapAndPaste], 供日后遇到更适合位图方式的软件时使用。
   ///
   /// 成功写入剪贴板返回 true。
   static Future<bool> copyImageAndPaste(String filePath) async {
@@ -49,23 +45,36 @@ class PlatformEmojiClipboardService {
       return false;
     }
 
-    final file = File(filePath);
-    if (!file.existsSync()) {
+    if (!File(filePath).existsSync()) {
       return false;
     }
 
-    if (_pasteAsFileExtensions.contains(
-      filePath.toLowerCase().split('.').last,
-    )) {
-      try {
-        final result = await _channel.invokeMethod<Map<dynamic, dynamic>>(
-          'copyFileToClipboard',
-          <String, Object>{'path': filePath, 'paste': true},
-        );
-        return result?['clipboard'] == true;
-      } catch (_) {
-        return false;
-      }
+    try {
+      final result = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'copyFileToClipboard',
+        <String, Object>{'path': filePath, 'paste': true},
+      );
+      return result?['clipboard'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 以位图 (CF_DIB) 形式复制 [filePath] 并触发自动粘贴 (保留入口, 暂未使用)。
+  ///
+  /// 解码后把 RGBA 字节交给原生层构造 DIB 写入剪贴板 (QQ 等聊天软件
+  /// 截图粘贴即为此格式), 可选择隐藏本窗口并向之前的前台应用发送 Ctrl+V。
+  /// 注意: 位图方式会丢失 GIF 动画, 且接收方可能重新编码导致文件变大。
+  ///
+  /// 成功写入剪贴板返回 true。
+  static Future<bool> copyImageAsBitmapAndPaste(String filePath) async {
+    if (kIsWeb || !Platform.isWindows) {
+      return false;
+    }
+
+    final file = File(filePath);
+    if (!file.existsSync()) {
+      return false;
     }
 
     try {

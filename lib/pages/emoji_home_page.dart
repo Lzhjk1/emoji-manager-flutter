@@ -972,7 +972,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          '唤起本窗口时记录前置应用：若其进程名在列表中，点击表情会以位图（CF_DIB，非 PNG/文件）复制，并自动粘贴回该应用窗口。留空表示关闭自动粘贴。',
+                          '唤起本窗口时记录前置应用：若其进程名在列表中，点击表情会以原文件形式复制到剪贴板并自动粘贴回该应用窗口，保留 GIF 动画与 JPEG 压缩。留空表示关闭自动粘贴。',
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(color: Colors.white54),
                         ),
