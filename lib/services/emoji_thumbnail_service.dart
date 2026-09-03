@@ -12,7 +12,8 @@ import 'package:path/path.dart' as p;
 /// 在表情库根目录的 `.emoji_manager/thumbnails/` 下存放 256px JPEG 缩略图,
 /// 并用 `thumbnail_index.json` 记录 源图相对路径 -> (源图修改时间, 缩略图路径),
 /// 以"源图修改时间是否变化"判断缩略图是否需要重新生成。
-/// 解码/裁剪/编码均通过 [compute] 在后台 isolate 完成, 避免卡顿 UI。
+/// 解码用引擎按目标尺寸 (≤256px) 缩放解码, 避免全尺寸位图瞬态把
+/// isolate 页池/工作集推高; 裁剪/编码在 256px 小图上进行, 开销可忽略。
 class EmojiThumbnailService {
   /// 表情库内的缓存目录名。
   static const cacheDirectoryName = '.emoji_manager';
@@ -89,15 +90,12 @@ class EmojiThumbnailService {
 
     try {
       if (needsUpdate) {
-        // 重活放在后台 isolate: 解码 + 裁剪 + 编码, 大位图随 isolate 释放。
-        var encoded = await compute(
-          _generateThumbnailBytes,
-          filePath,
-        );
-        // image 包解不开的文件 (如含 RST 重启标记的 JPEG) 用引擎原生解码兜底。
-        // 引擎图像解码器注册表无法在 compute 的后台 isolate 中访问,
-        // 因此兜底解码在主 isolate 执行 (先缩到 256px, 开销很小)。
-        encoded ??= await _generateThumbnailBytesViaEngine(filePath);
+        // 引擎按目标尺寸 (≤256px) 缩放解码, 在主 isolate 执行
+        // (引擎图像解码器注册表无法在 compute 的后台 isolate 中访问);
+        // JPEG/WebP 走解码器原生缩放, 单张瞬态 <1MB, 无卡顿。
+        final sourceBytes = await File(filePath).readAsBytes();
+        final decoded = await _decodeWithEngine(sourceBytes);
+        final encoded = decoded == null ? null : _cropAndEncode(decoded);
         if (encoded == null) {
           return null;
         }
@@ -225,42 +223,6 @@ class ThumbnailEntry {
   }
 }
 
-/// 在后台 isolate 中用 image 包读取并解码 [filePath]。
-/// 无法解码时返回 null, 由调用方走引擎原生解码兜底。
-Future<Uint8List?> _generateThumbnailBytes(String filePath) async {
-  try {
-    final sourceBytes = File(filePath).readAsBytesSync();
-    img.Image? decoded;
-    try {
-      decoded = img.decodeImage(sourceBytes);
-    } catch (_) {
-      // image 包无法识别的格式变体 (如含 RST 重启标记的 JPEG) 会抛异常。
-      decoded = null;
-    }
-    if (decoded == null) {
-      return null;
-    }
-    return _cropAndEncode(decoded);
-  } catch (_) {
-    return null;
-  }
-}
-
-/// 主 isolate 兜底: 用 Flutter 引擎原生解码 (Skia, 兼容 image 包
-/// 不支持的 JPEG 变体), 再复用居中裁剪与 JPEG 编码逻辑。
-Future<Uint8List?> _generateThumbnailBytesViaEngine(String filePath) async {
-  try {
-    final sourceBytes = File(filePath).readAsBytesSync();
-    final decoded = await _decodeWithEngine(sourceBytes);
-    if (decoded == null) {
-      return null;
-    }
-    return _cropAndEncode(decoded);
-  } catch (_) {
-    return null;
-  }
-}
-
 /// 居中裁成正方形并缩放到 [EmojiThumbnailService.thumbnailMaxSize],
 /// 编码为 JPEG。
 Uint8List? _cropAndEncode(img.Image decoded) {
@@ -294,10 +256,12 @@ Uint8List? _cropAndEncode(img.Image decoded) {
   }
 }
 
-/// 回退解码: 用 Flutter 引擎原生解码器处理 image 包不支持的文件
-/// (引擎基于 Skia, 兼容含 RST 重启标记等 JPEG 变体)。
+/// 引擎解码: 用 Flutter 引擎原生解码器按目标尺寸缩放解码
+/// (JPEG 走 DCT 域缩放、WebP 走原生降分辨率, 不物化全尺寸位图;
+/// PNG 无原生缩放, 引擎内部先解码再缩, 瞬态由引擎自行管理)。
 /// 等比缩放至最长边不超过 [EmojiThumbnailService.thumbnailMaxSize],
 /// 再转回 [img.Image] 以复用居中裁剪与 JPEG 编码逻辑。
+/// 注意: 必须在主 isolate 调用 (后台 isolate 无法访问解码器注册表)。
 Future<img.Image?> _decodeWithEngine(Uint8List sourceBytes) async {
   ui.Codec? codec;
   try {
