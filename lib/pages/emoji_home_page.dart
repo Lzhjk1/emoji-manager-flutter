@@ -1616,9 +1616,12 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
 
   /// 强制重新生成单张图片的缩略图。
   Future<void> _refreshItemThumbnail(EmojiItem item) async {
-    // GIF 预览直接加载源文件, 其修改时间可能没变, 需主动逐出缓存;
-    // 缩略图文件重建后修改时间会更新, FileImage 缓存键随之变化, 无需处理。
-    PaintingBinding.instance.imageCache.evict(FileImage(File(item.path)));
+    // 缩略图文件重建后修改时间更新, FileImage 缓存键随之变化, 自动失效;
+    // GIF 直接以源文件播放, 修改时间可能不变, 且网格/预览均经 ResizeImage
+    // 包裹解码, 缓存键含各自目标尺寸无法逐一枚举, 直接清空图片缓存最稳妥。
+    final imageCache = PaintingBinding.instance.imageCache;
+    imageCache.clear();
+    imageCache.clearLiveImages();
 
     final refreshed = await _controller.refreshThumbnail(item.path);
     if (!mounted) {
@@ -1639,18 +1642,28 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
   /// 网格卡片的图片 provider: 优先用缩略图 (按网格尺寸解码);
   /// GIF 无缩略图, 直接加载源文件以显示动图。
   ImageProvider<Object>? _imageProviderFor(EmojiItem item) {
-    final thumbnailPath = _thumbnailPathFor(item);
-    if (thumbnailPath == null) {
-      if (item.mimeType == 'image/gif') {
-        return FileImage(File(item.path));
-      }
-      return null;
-    }
     final dpr = MediaQuery.devicePixelRatioOf(context);
+    // 与静态缩略图一致: 按网格尺寸 (含间距) 限流解码, thumbnailMaxSize 封顶;
+    // 调整网格大小时仅可见卡片按新缓存键重新解码, 输入是小文件, 成本很低。
     final targetSize = math.min(
       (((_controller.gridThumbnailSize + 16) * dpr).round()),
       EmojiThumbnailService.thumbnailMaxSize,
     );
+    final thumbnailPath = _thumbnailPathFor(item);
+    if (thumbnailPath == null) {
+      if (item.mimeType == 'image/gif') {
+        // GIF 不落盘缩略图, 直接缩放解码源文件播放动图; 不限流时每帧
+        // 都按原图尺寸解码 (含帧合成缓冲), 可见 GIF 多时内存累积明显。
+        // fit 策略保证非正方形源图等比缩放, 不会被拉伸成方图。
+        return ResizeImage(
+          FileImage(File(item.path)),
+          width: targetSize,
+          height: targetSize,
+          policy: ResizeImagePolicy.fit,
+        );
+      }
+      return null;
+    }
     return ResizeImage(
       FileImage(File(thumbnailPath)),
       width: targetSize,
