@@ -1,0 +1,59 @@
+name: Build Windows Installer
+
+# 推送 v 开头或数字开头的标签时触发，例如: git tag 0.0.3-rc6 && git push origin 0.0.3-rc6
+on:
+  push:
+    tags:
+      - 'v*'
+      - '[0-9]*'
+  # 也支持在 Actions 页面手动触发
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Read version from lib/app_version.dart
+        id: version
+        shell: pwsh
+        run: |
+          $dart = Get-Content lib/app_version.dart -Raw
+          if ($dart -notmatch "appVersion\s*=\s*'([^']+)'") {
+            throw "无法从 lib/app_version.dart 解析 appVersion"
+          }
+          $version = $Matches[1]
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "版本号: $version"
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $tag = $env:GITHUB_REF_NAME.TrimStart('v')
+            if ($tag -ne $version) {
+              Write-Host "::warning::标签 $env:GITHUB_REF_NAME 与 app_version.dart 中的版本 $version 不一致，安装包以 $version 命名"
+            }
+          }
+
+      - name: Build and pack
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File build-and-pack.ps1
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EmojiManager-Setup-${{ steps.version.outputs.version }}
+          path: installer/output/EmojiManager-Setup-*.exe
+          if-no-files-found: error
+
+      - name: Create release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer/output/EmojiManager-Setup-*.exe
+          generate_release_notes: true
