@@ -398,10 +398,24 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                       size: 120,
                       color: Colors.white38,
                     )
-                  : Image.file(
-                      File(item.path),
-                      fit: BoxFit.contain,
-                      filterQuality: FilterQuality.medium,
+                  : LayoutBuilder(
+                      builder: (context, constraints) {
+                        // 按覆盖层实际显示尺寸 (乘 devicePixelRatio) 限制解码
+                        // 分辨率, 避免全尺寸原图解码导致内存暴涨; fit 策略
+                        // 保证等比缩放, 与 BoxFit.contain 显示效果一致。
+                        final dpr = MediaQuery.devicePixelRatioOf(context);
+                        final provider = ResizeImage(
+                          FileImage(File(item.path)),
+                          width: (constraints.maxWidth * dpr).round(),
+                          height: (constraints.maxHeight * dpr).round(),
+                          policy: ResizeImagePolicy.fit,
+                        );
+                        return Image(
+                          image: provider,
+                          fit: BoxFit.contain,
+                          filterQuality: FilterQuality.medium,
+                        );
+                      },
                     ),
             ),
           ),

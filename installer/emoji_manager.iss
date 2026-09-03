@@ -2,7 +2,7 @@
 ; 编译方式: ISCC.exe installer\emoji_manager.iss (在项目根目录执行)
 
 #define MyAppName "Emoji Manager"
-#define MyAppVersion "0.0.3-rc3"
+#define MyAppVersion "0.0.3-rc4"
 #define MyAppPublisher "Roasal"
 #define MyAppExeName "emoji_manager_flutter.exe"
 #define MyReleaseDir "..\build\windows\x64\runner\Release"

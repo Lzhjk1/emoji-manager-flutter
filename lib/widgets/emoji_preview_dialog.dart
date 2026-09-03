@@ -215,6 +215,8 @@ class _EmojiPreviewDialogState extends State<EmojiPreviewDialog> {
                   builder: (context, constraints) {
                     // 按弹窗实际显示尺寸 (乘 devicePixelRatio) 限制解码分辨率,
                     // 而不是按原图全尺寸解码, 控制内存占用。
+                    // fit 策略等比缩放到不超过目标尺寸; 默认 exact 会同时
+                    // 指定宽高强行拉伸, 导致图片高度被压扁变形。
                     final dpr = MediaQuery.devicePixelRatioOf(context);
                     final targetWidth =
                         (constraints.maxWidth * dpr).round().clamp(256, 4096);
@@ -224,6 +226,7 @@ class _EmojiPreviewDialogState extends State<EmojiPreviewDialog> {
                       FileImage(File(widget.item.path)),
                       width: targetWidth,
                       height: targetHeight,
+                      policy: ResizeImagePolicy.fit,
                     );
                     _previewImageProvider = provider;
 
