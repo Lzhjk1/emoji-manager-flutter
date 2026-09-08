@@ -249,7 +249,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
         // 完成 build 与缩略图解码, 掩盖快速滚动时的解码
         // 延迟; 对应参考项目 IntersectionObserver 的
         // 600px rootMargin 预载缓冲。
-        scrollCacheExtent: ScrollCacheExtent.pixels(600),
+        scrollCacheExtent: ScrollCacheExtent.pixels(0),
         physics: const _GridScrollPhysics(),
         gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
           maxCrossAxisExtent: _controller.gridThumbnailSize,
