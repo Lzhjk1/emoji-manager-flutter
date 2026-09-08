@@ -227,27 +227,7 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
                     onPointerCancel: (_) => _finishPress(),
                     child: _controller.visibleItems.isEmpty
                         ? _buildEmptyCategoryState()
-                        : GridView.builder(
-                            // 视口外预构建 600px (约 6-8 行), 新卡片滑入前就
-                            // 完成 build 与缩略图解码, 掩盖快速滚动时的解码
-                            // 延迟; 对应参考项目 IntersectionObserver 的
-                            // 600px rootMargin 预载缓冲。
-                            scrollCacheExtent: ScrollCacheExtent.pixels(600),
-                            physics: const _GridScrollPhysics(),
-                            gridDelegate:
-                                SliverGridDelegateWithMaxCrossAxisExtent(
-                                  maxCrossAxisExtent:
-                                      _controller.gridThumbnailSize,
-                                  mainAxisSpacing: 8,
-                                  crossAxisSpacing: 8,
-                                  childAspectRatio: 1.0,
-                                ),
-                            itemCount: _controller.visibleItems.length,
-                            itemBuilder: (context, index) => _buildGridCard(
-                              context,
-                              _controller.visibleItems[index],
-                            ),
-                          ),
+                        : _buildResultsView(),
                   ),
                 ),
                 if (_dragging) _buildDropOverlay(context),
@@ -256,6 +236,79 @@ class _EmojiHomePageState extends State<EmojiHomePage> {
           ),
         ),
       ],
+    );
+  }
+
+  /// 结果区: 搜索中的"全部"视图按来源分类分组展示 (组标题 + 各组网格),
+  /// 其余情况为单一平铺网格。
+  Widget _buildResultsView() {
+    final groups = _controller.groupedSearchResults;
+    if (groups == null) {
+      return GridView.builder(
+        // 视口外预构建 600px (约 6-8 行), 新卡片滑入前就
+        // 完成 build 与缩略图解码, 掩盖快速滚动时的解码
+        // 延迟; 对应参考项目 IntersectionObserver 的
+        // 600px rootMargin 预载缓冲。
+        scrollCacheExtent: ScrollCacheExtent.pixels(600),
+        physics: const _GridScrollPhysics(),
+        gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: _controller.gridThumbnailSize,
+          mainAxisSpacing: 8,
+          crossAxisSpacing: 8,
+          childAspectRatio: 1.0,
+        ),
+        itemCount: _controller.visibleItems.length,
+        itemBuilder: (context, index) => _buildGridCard(
+          context,
+          _controller.visibleItems[index],
+        ),
+      );
+    }
+
+    return CustomScrollView(
+      scrollCacheExtent: ScrollCacheExtent.pixels(600),
+      physics: const _GridScrollPhysics(),
+      slivers: [
+        for (final group in groups) ...[
+          SliverToBoxAdapter(
+            child: _buildSearchGroupHeader(group.key, group.value.length),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.only(bottom: 12),
+            sliver: SliverGrid(
+              gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: _controller.gridThumbnailSize,
+                mainAxisSpacing: 8,
+                crossAxisSpacing: 8,
+                childAspectRatio: 1.0,
+              ),
+              delegate: SliverChildBuilderDelegate(
+                (context, index) => _buildGridCard(context, group.value[index]),
+                childCount: group.value.length,
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// 分组标题: 分类名 + 匹配数量。
+  Widget _buildSearchGroupHeader(String category, int count) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(2, 4, 2, 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Text(category, style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(width: 8),
+          Text(
+            '$count',
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: Colors.white38),
+          ),
+        ],
+      ),
     );
   }
 

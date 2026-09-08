@@ -57,6 +57,10 @@ class EmojiManagerController extends ChangeNotifier {
   List<String> _autoPasteProcesses = const [];
   bool _hotkeyEnabled = true;
   bool _showCategoryImages = true;
+
+  /// 搜索联动切到"全部"视图时, 记住搜索前所在分类 (清空搜索后恢复)。
+  /// null 表示无需恢复 (搜索开始于"全部"视图, 或用户手动切换过分类)。
+  String? _categoryBeforeSearch;
   int _hotkeyModifiers = WindowControlService.hotkeyModifierControl |
       WindowControlService.hotkeyModifierShift;
   int _hotkeyKeyCode = 0x56; // 'V'
@@ -167,12 +171,30 @@ class EmojiManagerController extends ChangeNotifier {
     if (_searchQuery.isEmpty) {
       return source;
     }
+    return source.where(_matchesSearchQuery).toList();
+  }
 
+  /// 表情是否匹配当前搜索词 (匹配文件名或备注, 大小写不敏感)。
+  bool _matchesSearchQuery(EmojiItem item) {
     final keyword = _searchQuery.toLowerCase();
-    return source.where((item) {
-      return item.name.toLowerCase().contains(keyword) ||
-          (item.remark?.toLowerCase().contains(keyword) ?? false);
-    }).toList();
+    return item.name.toLowerCase().contains(keyword) ||
+        (item.remark?.toLowerCase().contains(keyword) ?? false);
+  }
+
+  /// "全部"视图 + 搜索中时, 把匹配结果按分类分组 (保持分类原有顺序与
+  /// 分类列表顺序), 供 UI 分区展示; 其余情况返回 null (使用平铺网格)。
+  List<MapEntry<String, List<EmojiItem>>>? get groupedSearchResults {
+    if (_searchQuery.isEmpty || _selectedCategory != allCategoryView) {
+      return null;
+    }
+    return [
+      for (final entry in _itemsByCategory.entries)
+        if (entry.value.any(_matchesSearchQuery))
+          MapEntry(
+            entry.key,
+            entry.value.where(_matchesSearchQuery).toList(growable: false),
+          ),
+    ];
   }
 
   /// 应用启动初始化: 恢复设置、应用窗口/热键配置,
@@ -830,29 +852,64 @@ class EmojiManagerController extends ChangeNotifier {
   }
 
   /// 选择分类视图。
+  ///
+  /// 搜索联动期间 (_categoryBeforeSearch != null) 的手动切换视为用户主动
+  /// 放弃恢复, 清空记忆避免清空搜索时跳回旧分类。
   void selectCategory(String category) {
     if (_selectedCategory == category) {
       return;
     }
     _selectedCategory = category;
+    _categoryBeforeSearch = null;
     notifyListeners();
   }
 
   /// 更新搜索词 (自动去首尾空白)。
+  ///
+  /// 搜索词非空时自动切到"全部"视图全局搜索: 首次输入记住当前分类,
+  /// 清空搜索时恢复搜索前所在分类。
   void updateSearchQuery(String value) {
-    if (_searchQuery == value.trim()) {
+    final query = value.trim();
+    if (_searchQuery == query) {
       return;
     }
-    _searchQuery = value.trim();
+    _searchQuery = query;
+    if (_itemsByCategory.isNotEmpty) {
+      if (query.isNotEmpty && _categoryBeforeSearch == null) {
+        _categoryBeforeSearch = _selectedCategory;
+        if (_selectedCategory != allCategoryView) {
+          _selectedCategory = allCategoryView;
+        }
+      } else if (query.isEmpty && _categoryBeforeSearch != null) {
+        final restore = _categoryBeforeSearch;
+        _categoryBeforeSearch = null;
+        if (restore != null &&
+            (restore == allCategoryView ||
+                restore == recentCategoryView ||
+                _itemsByCategory.containsKey(restore))) {
+          _selectedCategory = restore;
+        }
+      }
+    }
     notifyListeners();
   }
 
   /// 清空搜索词。
+  ///
+  /// 若此前因搜索联动切到了"全部", 恢复搜索前所在分类。
   void clearSearch() {
     if (_searchQuery.isEmpty) {
       return;
     }
     _searchQuery = '';
+    final restore = _categoryBeforeSearch;
+    _categoryBeforeSearch = null;
+    if (restore != null &&
+        restore != allCategoryView &&
+        (restore == recentCategoryView ||
+            _itemsByCategory.containsKey(restore))) {
+      _selectedCategory = restore;
+    }
     notifyListeners();
   }
 
